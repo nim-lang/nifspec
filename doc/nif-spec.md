@@ -4,49 +4,17 @@ NIF data format
 The NIF data format is a text based file format designed for compiler frontend/backend
 communication or communication between different programming languages. The design is
 heavily tied to Nim's requirements. However, the design works on language agnostic ASTs
-and is so extensible that other programming languages will work well with it too.
+and is so extensible that other programming languages work well with it too.
 
 A NIF file corresponds to a "module" in the source language. The module is stored as an AST.
 The AST consists of "atoms" and "compound nodes".
 
 
-Design goals
-------------
-
-- Simple to parse.
-- Simple to generate.
-- Text representation that tends to produce small code.
-- Extensible and easily backwards compatible with earlier versions.
-- Lossless conversion back to the source code is possible.
-- Can be as high level or as low level as required because statements, expressions
-  and declarations can be nested arbitrarily.
-- Lots of search&replace like operations can be performed reliably with pure text
-  manipulation. No parsing step is required for these.
-- Readable and writable for humans. However, it is not optimized for this task.
-
 Extensibility is primarily achieved by using two different namespaces. One namespace
-is used for "node kinds" and a different one for source level identifiers. This does
-away with the notion of a fixed set of "keywords". In NIF new "keywords" ("node kinds")
+is used for "node kinds" / "tags" and a different one for source level identifiers. This does
+away with the notion of a fixed set of "keywords". In NIF new "keywords" ("tags")
 can be introduced without breaking any code.
 
-
-Why yet another data format?
-----------------------------
-
-Other, comparable formats (LLVM Bitcode or text format, JVM bytecode, .NET bytecode, wasm)
-have one or more of the following flaws:
-
-- More complex to parse.
-- Too low level representation that loses structured control flow.
-- Too low level representation that implies the creation of temporary variables that are
-  not in the original source code file.
-- Binary formats that make it harder to create tools for.
-- Less flexible.
-- Cannot express Nim code well.
-- Produces bigger files.
-
-
-<div style="page-break-after: always;"></div>
 
 Example NIF module
 ------------------
@@ -59,20 +27,6 @@ In order to get a feeling for how a NIF file can look, here is a complete exampl
 (imp 2,5,sysio.nim(type :File (object ..)))
 (imp (proc :write.1.sys . (pragmas varargs) (params (param f File)).))
 (call write.1.sys "Hello World!\0A")
-)
-```
-
-A generator can produce shorter code by making use of `.k` and `.i` (substitution) directives:
-
-```nif
-(.nif24)
-(.k I imp)
-(.k P pragmas)
-(.i write write.1.sys)
-(stmts
-(I 2,5,sysio.nim(type :File (object ..)))
-(I (proc :write . (P varargs) (params (param f File)).))
-(call write "Hello World!\0A")
 )
 ```
 
@@ -171,7 +125,7 @@ backslashes, `\xx` much like it is used in string and character literals.
 A "symbol" is a name that refers to an entity unambiguously. A symbol must adhere to the grammar:
 
 ```
-Symbol ::= IdentStart+ '.' (IdentChar | '.')*
+Symbol ::= IdentStart IdentChar* '.' (IdentChar | '.')*
 SymbolDef ::= ':' Symbol
 ```
 
@@ -435,53 +389,10 @@ There must be no whitespace before the version directive so that it also functio
 "magic cookie" for tools that use these to determine file types.
 
 
-### Dialect directive
-
-The `.dialect` directive takes a single string literal describing what exactly the NIF
-code describes. The values are vendor specific. For Nim the possible values are:
-
-| Value      | Description                                                                 |
-| --------------- | --------------------------------------------------------------------------- |
-| `"nim-parsed"`  | Parsed Nim code without semantic checking. |
-| `"nim-gear2"`   | Parsed Nim code after semantic checking. |
-| `"nim-gear3"` | Nim code after inlining. |
-| `"nim-gear4"` | Nim code after destructor injections (final step before code generation). |
-| `"nif-c"` | NIF code that is very close to C code. |
-
-
-### Substitutions
-
-Every token in the class `{identifier, symbol, node-kind}` can be subject to a simple
-token substitution mechanism. For identifiers and symbols a substitution looks
-like `(.i <name> <to be replaced with>)`.
-
-For node kinds a substitution looks like `(.k <name> <node kind>)`.
-
-The tree that is a result of a substitution **must not** itself contain a substitution. This also
-implies that `(.i a a)` does not cause an infinite regress: The identifier `a` is simply
-replaced by `a` and the substitution stops afterwards.
-
-*Rationale*: This allows for a user to come up with a scheme like "every substitution name ends in a digit
-and if an identifier already ends in one we generate (.i a0 a0)".
-
-For example:
-
-```nif
-(.i ECHO echo.1.system)
-(.k C call)
-(.i Hello "Hello world!\0A")
-
-(stmts
-(call ECHO +1 +2 +3)
-(C ECHO Hello)
-)
-```
-
-
 ### Other directives
 
-These look like `(.vendor "some string here")` and `(.platform "some string here")`
-and `(.config "some string here")` and contain vendor specific information. Usually
+These might look like `(.vendor "some string here")` or `(.platform "some string here")`
+or `(.config "some string here")` and contain vendor specific information. Usually
 these can be ignored.
 
 
@@ -502,11 +413,11 @@ NIF trees as identifiers
 ------------------------
 
 In many cases it is useful to turn a NIF tree into a canonical string representation that also
-forms a valid identifier (for C code generation or otherwise). The following encoding scheme
+forms a valid identifier (for code generation or otherwise). The following encoding scheme
 accomplishes this task:
 
 1. Line information and comments are ignored.
-2. The unary `+` for numbers are removed.
+2. The unary `+` for numbers is removed.
 3. The substring of trailing `)` is removed as there is nothing interesting about `))))`.
 4. Whitespace is canonicalized to a single space.
 5. The space after `)` and before `(` is removed.
@@ -538,14 +449,14 @@ In summary:
 | Letter | Used for |
 | --------- | -------------- |
 | `A`    | begin of a compound node `(` |
-| `Z`   | end of a compound node `)`  |
-| `E`   | the empty node |
+| `Z`   | end of a compound node `)`  |
+| `E`   | the empty node |
 | `S`   | space; separator between a node's children |
 | `O`   | encodes the colon in a SymbolDef |
 | `U`   | encodes the `"` that is used to delimit string literals |
-| `X` | used to escape the letters used in this encoding and in general for characters that should not be used in an identifier |
+| `X` | used to escape the letters used in this encoding and in general for characters that should not be used in an identifier |
 | `R` | reference to an identifier or a symbol that has already occured |
-| `K` | reference to a node kind that has already occured |
+| `K` | reference to a node kind that has already occured |
 
 For example:
 
