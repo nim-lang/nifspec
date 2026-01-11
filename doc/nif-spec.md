@@ -15,6 +15,20 @@ is used for "node kinds" / "tags" and a different one for source level identifie
 away with the notion of a fixed set of "keywords". In NIF new "keywords" ("tags")
 can be introduced without breaking any code.
 
+There is also an optional **index structure** that maps symbols to offsets within a NIF file.
+This makes NIF a hybrid between a binary and a text file.
+
+
+Version 2026
+------------
+
+This document describes the **2026** version of NIF. Differences to the original version from 2024:
+
+- The `(.nif24)` directive and other directives have been removed.
+- The index structure became an official part of the spec.
+- How symbol names must be formed is more refined.
+- Global symbol names can be shortened by a trailing dot.
+
 
 Example NIF module
 ------------------
@@ -22,7 +36,6 @@ Example NIF module
 In order to get a feeling for how a NIF file can look, here is a complete example:
 
 ```nif
-(.nif24)
 (stmts
 (imp 2,5,sysio.nim(type :File (object ..)))
 (imp (proc :write.1.sys . (pragmas varargs) (params (param f File)).))
@@ -141,6 +154,18 @@ A `SymbolDef` is a symbol annotated with a leading ':'. It indicates that the pa
 the node introducing this symbol. Thus a tool can implement a feature like "goto definition"
 in a language agnostic way without having to know which node kinds introduce new symbols.
 
+There are two kinds of symbols: local and global symbols. A local symbol is of the form `<ident>.<disamb>` where
+`disamb` is a list of digits. For example a name like `foo.0` where the `0` implies it is the first symbol
+originally named `foo`. The `0` is also called a "disambiguation number". Local symbols are not part of the
+optional lookup index structure.
+
+A global symbol is of the form `<ident>.<disamb>.<moduleSuffix>`, or `<ident>.<disamb>.<key>.<moduleSuffix>` where `key`
+usually is the result from a generic instantiation.
+
+A global symbol can leave out the `moduleSuffix` but then a trailing dot must be present to distinguish between
+local and global symbols: `foo.0` is a **local symbol** in the current module, `foo.0.` is a **global symbol** that
+is immediately expanded during parsing to `foo.0.modname` assuming the file being processed is `modname.nif`.
+
 
 ### Numbers
 
@@ -212,9 +237,9 @@ Atom ::= Empty | Identifier | Symbol | SymbolDef | Number | CharLiteral |
 
 NodeKind ::= Identifier
 
-Node ::= Atom | CompoundNode
+Node ::= NodePrefix (Atom | CompoundNode)
 NodePrefix ::= LineInfo? Comment?
-CompoundNode ::= NodePrefix '(' NodeKind Node* ')'
+CompoundNode ::= '(' NodeKind Node* ')'
 ```
 
 The general syntax for a compound node is `(nodekind child1 child2 child3)`.
@@ -354,48 +379,6 @@ If a node is annotated both with line information and a comment the line informa
 to come first.
 
 
-Directives
-----------
-
-A directive looks like `(.directive ...)`. This is not ambiguous because a node kind cannot
-start with a dot. The existing directives are:
-
-- `.nif<version>`
-- `.vendor`
-- `.platform`
-- `.config`
-- `.dialect`
-- `.i` and `.k` substitutions.
-
-Directives must be at the start of the file, before the module's AST. Directives that unknown
-to a parser should be ignored. An implementation can offer additional directives.
-
-*Rationale*: Compatibility between different NIF versions and implementations.
-
-
-### Version directive
-
-The version directive looks like `(.nif<version>)`. Version is currently always `24`
-because the first version of this NIF spec was released in 2024.
-
-
-For example:
-
-```nif
-(.nif24)
-```
-
-There must be no whitespace before the version directive so that it also functions as a
-"magic cookie" for tools that use these to determine file types.
-
-
-### Other directives
-
-These might look like `(.vendor "some string here")` or `(.platform "some string here")`
-or `(.config "some string here")` and contain vendor specific information. Usually
-these can be ignored.
-
-
 Modules
 -------
 
@@ -407,6 +390,65 @@ Formally a module is simply a non-empty list of `CompoundNode`:
 ```
 NifModule ::= CompoundNode+
 ```
+
+### Module suffixes
+
+A module is a file on disk. The filename typically has the structure `<suffix>.<pipeline-step>.nif`
+where `<pipeline-step>` typically is short form  like `p` (for "parsed" file) or `s` (for "semchecked" file).
+
+For example in `sysma2dyk.s.nif`:
+
+- `sysma2dyk` is the module's unique name. This is also the used suffix for global symbols that end in a dot: `foo.0.` is expanded to `foo.0.sysma2dyk` by a NIF parser.
+- `s` is the "pipeline-step". Here `s` indicates that the file was checked for semantics, in other words identifiers have been looked up and translated to symbols and that type-checking has been performed. The pipeline-step is optional.
+- `nif` is the file extension. Every NIF file should have this file extension.
+
+
+Directives
+----------
+
+A directive looks like an atom like a string literal, an integer literal or a symbol.
+
+Directives must be at the start of the file, before the module's AST. Directives that are unknown
+to a parser should be ignored.
+
+
+Indexes
+-------
+
+If the first directive is an integer literal it specifies a byte offset into the current file
+that describes where to find the index structure. The index always uses the tag `index` and `kv`
+pairs. For example:
+
+
+```
++1234
+(stmts
+  (proc :foo.0.suffix ...)
+  (var :bar.0.suffix ...)
+)
+(index
+  (kv foo.0.suffix +12)
+  (kv bar.0.suffix +23)
+)
+```
+
+The offsets are **diff**-based, to keep the resulting numbers shorter! The first entry is relative to +0
+and then the absolute value of entry N is the value of N-1 plus the current value. In other words for the
+above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
+
+Only symbols that have at least two dots have entries in the index. The idea is that only these symbols are top level entries that are interesting to jump to from outside the current module.
+
+Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
+
+
+Unused name hints
+-----------------
+
+If the second directive is a symbol it indicates the first available symbol for a code generator
+that does not occur in the current file. For example `tmp.14` would tell the NIF processor that
+the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous
+temporary local names.
+
 
 
 NIF trees as identifiers
