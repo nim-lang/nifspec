@@ -48,8 +48,11 @@ In order to get a feeling for how a NIF file can look, here is a complete exampl
 Encoding
 --------
 
-A NIF file is stored as a mere sequence of bytes ("octets"). No Unicode validation
-steps are performed and no BOM-prefix can be used.
+A NIF file is stored as a sequence of bytes ("octets"). No Unicode validation steps are
+required; parsers operate on raw bytes. While UTF‑8 is commonly used, it is not mandated.
+Importantly, any byte with value >= 128 may be used directly in identifiers and
+literals without escaping — the set of control characters that must be escaped is
+restricted to ASCII characters only (see "Control characters" below).
 
 
 Whitespace
@@ -65,11 +68,13 @@ Whitespace is the set `{' ', '\t', '\n', '\r'}`.
 Control characters
 ------------------
 
-NIF uses some characters like `(`, `)` and `~` to describe the AST. As such these characters
-**must not** occur in string literals, char literals and comments so that a NIF parser can
-skip to the enclosing `)` without complex logic.
+NIF uses a small set of ASCII control characters (for example `(`, `)` and `~`) to describe
+AST structure. These characters **must not** occur literally in string literals, char
+literals, or comments because a parser relies on them to find matching delimiters.
+They may, however, be represented inside literals or comments or identifiers or symbols when escaped using the
+hex escape `\xx` (see "Escape sequences").
 
-The control characters are:
+The control characters are the following ASCII bytes:
 
 ```
 ( )  [ ]  { }  ~  #  '  "  \  :
@@ -120,17 +125,18 @@ Empty nodes do not require whitespace in between them: `...` is a list of 3 empt
 The most common atom is the "identifier". Its spelling must adhere to the grammar:
 
 ```
-IdentStart ::= <unicode_letter> | '_' | Escape
+IdentStart ::= <ascii_letter> | '_' | NonAscii | Escape
 IdentChar ::= IdentStart | [_0-9]
 Identifier ::= IdentStart+ IdentChar*
+NonAscii ::= byte value >= 128
 ```
 
+Identifiers have no real meaning; in particular it **cannot** be assumed that two identifiers
+with the same sequence of bytes (for example `abc`) refer to the same entity.
 
-Identifiers have no real meaning, in particular it **cannot** be assumed that two identifiers
-of the same string (for example `abc`) refer to the same entity.
-
-Identifiers that contain characters that are neither letters nor digits must be escaped via
-backslashes, `\xx` much like it is used in string and character literals.
+Bytes with value >= 128 may appear directly in identifiers and do not require escaping.
+Identifiers that contain characters that are neither ASCII letters nor digits nor bytes >= 128
+must be escaped using backslashes `\xx`, the same escape form used for string and char literals.
 
 
 ### Symbols
@@ -192,7 +198,7 @@ the corresponding section for more details.
 Grammar:
 
 ```
-VisibleChar ::= ASCII value >= 32 but not a control character
+VisibleChar ::= ASCII value >= 32 but not a control character | byte value >= 128
 CharLiteral ::= '\'' (VisibleChar | Escape) '\''
 ```
 
@@ -213,11 +219,11 @@ String literals are enclosed in double quotes. The only supported escape sequenc
 Whitespace, even including newlines, can be part of the string literal without having to
 escape it.
 
-For example:
+For example, the following single string literal contains an escaped byte plus an actual newline:
 
 ```nif
-  "This is a single\20
-  literal string"
+"This is a single\20
+literal string"
 ```
 
 Produces: `"This is a single \n  literal string"`.
@@ -340,7 +346,7 @@ There are 3 forms:
 The `diff` means that the value is relative to the parent node. For example `8` means that the node is at
 the same position as the parent node except that its column is `+8` characters. Negative numbers use the tilde
 and not the minus. Negative numbers are usually required for "infix" nodes where the left hand operand
-preceeds the parent (`x + y` becomes
+precedes the parent (`x + y` becomes
 `(infix add ~3 x 2 y)` because `x` is written before the `+` operator).
 
 The AST root node can only be annotated with the form `<column, line, filename>` as it has no parent node
@@ -411,6 +417,17 @@ A directive looks like an atom like a string literal, an integer literal or a sy
 Directives must be at the start of the file, before the module's AST. Directives that are unknown
 to a parser should be ignored.
 
+Conformance
+-----------
+
+A conformant NIF parser should:
+
+- Accept the module as a sequence of bytes and tolerate non-UTF-8 content.
+- Allow bytes with value >= 128 in identifiers and string/char literals without requiring escapes.
+- Support the `\xx` escape form for representing arbitrary byte values (including escaping control characters and `\` as `\5C`).
+- Parse and ignore unknown directives and tolerate optional indexes.
+- Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
+
 
 Indexes
 -------
@@ -432,9 +449,12 @@ pairs. For example:
 )
 ```
 
-The offsets are **diff**-based, to keep the resulting numbers shorter! The first entry is relative to +0
-and then the absolute value of entry N is the value of N-1 plus the current value. In other words for the
+The offsets are **diff**-based, to keep the resulting numbers shorter. The first entry is relative to +0
+and then the absolute value of entry N is the value of N-1 plus the current entry. In other words for the
 above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
+
+For clarity: if a file starts with a leading directive `+1000` (meaning the index begins at byte 1000),
+and the index contains entries `+12` and `+23`, the absolute offsets are `12` and `12 + 23 == 35`.
 
 Only symbols that have at least two dots have entries in the index. The idea is that only these symbols are top level entries that are interesting to jump to from outside the current module.
 
