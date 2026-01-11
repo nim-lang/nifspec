@@ -277,7 +277,7 @@ programming languages.
 | `const`    | A const declaration. |
 | `if`    | An `if` statement. |
 | `elif`    | An `elif` section inside an `if` statement. |
-| `else` | An `else` sectin within an `if` statement.
+| `else`    | An `else` section within an `if` statement. |
 | `while` | A `while` loop. |
 | `ret`   | A return statement. |
 | `brk`   | A break statement. |
@@ -473,8 +473,8 @@ The empty node (`.`) is encoded as `E`.
 
 Note that `.` within a symbol is **not** escaped!
 
-The N-th (where N > 1) occurance of a symbol or identifier
-is encoded as `R<x>` where `x` refers to the `x`'s symbol or identifier that already
+The N-th (where N > 1) occurrence of a symbol or identifier
+is encoded as `R<x>` where `x` refers to the symbol or identifier that has already
 been emitted. But only if `R<x>` is still shorter than the symbol/identifier.
 
 For example:
@@ -497,8 +497,8 @@ In summary:
 | `O`   | encodes the colon in a SymbolDef |
 | `U`   | encodes the `"` that is used to delimit string literals |
 | `X` | used to escape the letters used in this encoding and in general for characters that should not be used in an identifier |
-| `R` | reference to an identifier or a symbol that has already occured |
-| `K` | reference to a node kind that has already occured |
+| `R` | reference to an identifier or a symbol that has already occurred |
+| `K` | reference to a node kind that has already occurred |
 
 For example:
 
