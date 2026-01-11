@@ -15,6 +15,20 @@ is used for "node kinds" / "tags" and a different one for source level identifie
 away with the notion of a fixed set of "keywords". In NIF new "keywords" ("tags")
 can be introduced without breaking any code.
 
+There is also an optional **index structure** that maps symbols to offsets within a NIF file.
+This makes NIF a hybrid between a binary and a text file.
+
+
+Version 2026
+------------
+
+This document describes the **2026** version of NIF. Differences to the original version from 2024:
+
+- The `(.nif24)` directive and other directives have been removed.
+- The index structure became an official part of the spec.
+- How symbol names must be formed is more refined.
+- Global symbol names can be shortened by a trailing dot.
+
 
 Example NIF module
 ------------------
@@ -22,7 +36,6 @@ Example NIF module
 In order to get a feeling for how a NIF file can look, here is a complete example:
 
 ```nif
-(.nif24)
 (stmts
 (imp 2,5,sysio.nim(type :File (object ..)))
 (imp (proc :write.1.sys . (pragmas varargs) (params (param f File)).))
@@ -35,8 +48,11 @@ In order to get a feeling for how a NIF file can look, here is a complete exampl
 Encoding
 --------
 
-A NIF file is stored as a mere sequence of bytes ("octets"). No Unicode validation
-steps are performed and no BOM-prefix can be used.
+A NIF file is stored as a sequence of bytes ("octets"). No Unicode validation steps are
+required; parsers operate on raw bytes. While UTF‑8 is commonly used, it is not mandated.
+Importantly, any byte with value >= 128 may be used directly in identifiers and
+literals without escaping — the set of control characters that must be escaped is
+restricted to ASCII characters only (see "Control characters" below).
 
 
 Whitespace
@@ -52,11 +68,13 @@ Whitespace is the set `{' ', '\t', '\n', '\r'}`.
 Control characters
 ------------------
 
-NIF uses some characters like `(`, `)` and `~` to describe the AST. As such these characters
-**must not** occur in string literals, char literals and comments so that a NIF parser can
-skip to the enclosing `)` without complex logic.
+NIF uses a small set of ASCII control characters (for example `(`, `)` and `~`) to describe
+AST structure. These characters **must not** occur literally in string literals, char
+literals, or comments because a parser relies on them to find matching delimiters.
+They may, however, be represented inside literals or comments or identifiers or symbols when escaped using the
+hex escape `\xx` (see "Escape sequences").
 
-The control characters are:
+The control characters are the following ASCII bytes:
 
 ```
 ( )  [ ]  { }  ~  #  '  "  \  :
@@ -107,17 +125,18 @@ Empty nodes do not require whitespace in between them: `...` is a list of 3 empt
 The most common atom is the "identifier". Its spelling must adhere to the grammar:
 
 ```
-IdentStart ::= <unicode_letter> | '_' | Escape
+IdentStart ::= <ascii_letter> | '_' | NonAscii | Escape
 IdentChar ::= IdentStart | [_0-9]
 Identifier ::= IdentStart+ IdentChar*
+NonAscii ::= byte value >= 128
 ```
 
+Identifiers have no real meaning; in particular it **cannot** be assumed that two identifiers
+with the same sequence of bytes (for example `abc`) refer to the same entity.
 
-Identifiers have no real meaning, in particular it **cannot** be assumed that two identifiers
-of the same string (for example `abc`) refer to the same entity.
-
-Identifiers that contain characters that are neither letters nor digits must be escaped via
-backslashes, `\xx` much like it is used in string and character literals.
+Bytes with value >= 128 may appear directly in identifiers and do not require escaping.
+Identifiers that contain characters that are neither ASCII letters nor digits nor bytes >= 128
+must be escaped using backslashes `\xx`, the same escape form used for string and char literals.
 
 
 ### Symbols
@@ -140,6 +159,18 @@ backslashes, `\xx` much like it is used in string and character literals.
 A `SymbolDef` is a symbol annotated with a leading ':'. It indicates that the parent node is
 the node introducing this symbol. Thus a tool can implement a feature like "goto definition"
 in a language agnostic way without having to know which node kinds introduce new symbols.
+
+There are two kinds of symbols: local and global symbols. A local symbol is of the form `<ident>.<disamb>` where
+`disamb` is a list of digits. For example a name like `foo.0` where the `0` implies it is the first symbol
+originally named `foo`. The `0` is also called a "disambiguation number". Local symbols are not part of the
+optional lookup index structure.
+
+A global symbol is of the form `<ident>.<disamb>.<moduleSuffix>`, or `<ident>.<disamb>.<key>.<moduleSuffix>` where `key`
+usually is the result from a generic instantiation.
+
+A global symbol can leave out the `moduleSuffix` but then a trailing dot must be present to distinguish between
+local and global symbols: `foo.0` is a **local symbol** in the current module, `foo.0.` is a **global symbol** that
+is immediately expanded during parsing to `foo.0.modname` assuming the file being processed is `modname.nif`.
 
 
 ### Numbers
@@ -167,7 +198,7 @@ the corresponding section for more details.
 Grammar:
 
 ```
-VisibleChar ::= ASCII value >= 32 but not a control character
+VisibleChar ::= ASCII value >= 32 but not a control character | byte value >= 128
 CharLiteral ::= '\'' (VisibleChar | Escape) '\''
 ```
 
@@ -188,11 +219,11 @@ String literals are enclosed in double quotes. The only supported escape sequenc
 Whitespace, even including newlines, can be part of the string literal without having to
 escape it.
 
-For example:
+For example, the following single string literal contains an escaped byte plus an actual newline:
 
 ```nif
-  "This is a single\20
-  literal string"
+"This is a single\20
+literal string"
 ```
 
 Produces: `"This is a single \n  literal string"`.
@@ -212,9 +243,9 @@ Atom ::= Empty | Identifier | Symbol | SymbolDef | Number | CharLiteral |
 
 NodeKind ::= Identifier
 
-Node ::= Atom | CompoundNode
+Node ::= NodePrefix (Atom | CompoundNode)
 NodePrefix ::= LineInfo? Comment?
-CompoundNode ::= NodePrefix '(' NodeKind Node* ')'
+CompoundNode ::= '(' NodeKind Node* ')'
 ```
 
 The general syntax for a compound node is `(nodekind child1 child2 child3)`.
@@ -252,7 +283,7 @@ programming languages.
 | `const`    | A const declaration. |
 | `if`    | An `if` statement. |
 | `elif`    | An `elif` section inside an `if` statement. |
-| `else` | An `else` sectin within an `if` statement.
+| `else`    | An `else` section within an `if` statement. |
 | `while` | A `while` loop. |
 | `ret`   | A return statement. |
 | `brk`   | A break statement. |
@@ -315,7 +346,7 @@ There are 3 forms:
 The `diff` means that the value is relative to the parent node. For example `8` means that the node is at
 the same position as the parent node except that its column is `+8` characters. Negative numbers use the tilde
 and not the minus. Negative numbers are usually required for "infix" nodes where the left hand operand
-preceeds the parent (`x + y` becomes
+precedes the parent (`x + y` becomes
 `(infix add ~3 x 2 y)` because `x` is written before the `+` operator).
 
 The AST root node can only be annotated with the form `<column, line, filename>` as it has no parent node
@@ -354,48 +385,6 @@ If a node is annotated both with line information and a comment the line informa
 to come first.
 
 
-Directives
-----------
-
-A directive looks like `(.directive ...)`. This is not ambiguous because a node kind cannot
-start with a dot. The existing directives are:
-
-- `.nif<version>`
-- `.vendor`
-- `.platform`
-- `.config`
-- `.dialect`
-- `.i` and `.k` substitutions.
-
-Directives must be at the start of the file, before the module's AST. Directives that unknown
-to a parser should be ignored. An implementation can offer additional directives.
-
-*Rationale*: Compatibility between different NIF versions and implementations.
-
-
-### Version directive
-
-The version directive looks like `(.nif<version>)`. Version is currently always `24`
-because the first version of this NIF spec was released in 2024.
-
-
-For example:
-
-```nif
-(.nif24)
-```
-
-There must be no whitespace before the version directive so that it also functions as a
-"magic cookie" for tools that use these to determine file types.
-
-
-### Other directives
-
-These might look like `(.vendor "some string here")` or `(.platform "some string here")`
-or `(.config "some string here")` and contain vendor specific information. Usually
-these can be ignored.
-
-
 Modules
 -------
 
@@ -407,6 +396,79 @@ Formally a module is simply a non-empty list of `CompoundNode`:
 ```
 NifModule ::= CompoundNode+
 ```
+
+### Module suffixes
+
+A module is a file on disk. The filename typically has the structure `<suffix>.<pipeline-step>.nif`
+where `<pipeline-step>` typically is short form  like `p` (for "parsed" file) or `s` (for "semchecked" file).
+
+For example in `sysma2dyk.s.nif`:
+
+- `sysma2dyk` is the module's unique name. This is also the used suffix for global symbols that end in a dot: `foo.0.` is expanded to `foo.0.sysma2dyk` by a NIF parser.
+- `s` is the "pipeline-step". Here `s` indicates that the file was checked for semantics, in other words identifiers have been looked up and translated to symbols and that type-checking has been performed. The pipeline-step is optional.
+- `nif` is the file extension. Every NIF file should have this file extension.
+
+
+Directives
+----------
+
+A directive looks like an atom like a string literal, an integer literal or a symbol.
+
+Directives must be at the start of the file, before the module's AST. Directives that are unknown
+to a parser should be ignored.
+
+Conformance
+-----------
+
+A conformant NIF parser should:
+
+- Accept the module as a sequence of bytes and tolerate non-UTF-8 content.
+- Allow bytes with value >= 128 in identifiers and string/char literals without requiring escapes.
+- Support the `\xx` escape form for representing arbitrary byte values (including escaping control characters and `\` as `\5C`).
+- Parse and ignore unknown directives and tolerate optional indexes.
+- Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
+
+
+Indexes
+-------
+
+If the first directive is an integer literal it specifies a byte offset into the current file
+that describes where to find the index structure. The index always uses the tag `index` and `kv`
+pairs. For example:
+
+
+```
++1234
+(stmts
+  (proc :foo.0.suffix ...)
+  (var :bar.0.suffix ...)
+)
+(index
+  (kv foo.0.suffix +12)
+  (kv bar.0.suffix +23)
+)
+```
+
+The offsets are **diff**-based, to keep the resulting numbers shorter. The first entry is relative to +0
+and then the absolute value of entry N is the value of N-1 plus the current entry. In other words for the
+above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
+
+For clarity: if a file starts with a leading directive `+1000` (meaning the index begins at byte 1000),
+and the index contains entries `+12` and `+23`, the absolute offsets are `12` and `12 + 23 == 35`.
+
+Only symbols that have at least two dots have entries in the index. The idea is that only these symbols are top level entries that are interesting to jump to from outside the current module.
+
+Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
+
+
+Unused name hints
+-----------------
+
+If the second directive is a symbol it indicates the first available symbol for a code generator
+that does not occur in the current file. For example `tmp.14` would tell the NIF processor that
+the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous
+temporary local names.
+
 
 
 NIF trees as identifiers
@@ -431,8 +493,8 @@ The empty node (`.`) is encoded as `E`.
 
 Note that `.` within a symbol is **not** escaped!
 
-The N-th (where N > 1) occurance of a symbol or identifier
-is encoded as `R<x>` where `x` refers to the `x`'s symbol or identifier that already
+The N-th (where N > 1) occurrence of a symbol or identifier
+is encoded as `R<x>` where `x` refers to the symbol or identifier that has already
 been emitted. But only if `R<x>` is still shorter than the symbol/identifier.
 
 For example:
@@ -455,8 +517,8 @@ In summary:
 | `O`   | encodes the colon in a SymbolDef |
 | `U`   | encodes the `"` that is used to delimit string literals |
 | `X` | used to escape the letters used in this encoding and in general for characters that should not be used in an identifier |
-| `R` | reference to an identifier or a symbol that has already occured |
-| `K` | reference to a node kind that has already occured |
+| `R` | reference to an identifier or a symbol that has already occurred |
+| `K` | reference to a node kind that has already occurred |
 
 For example:
 
