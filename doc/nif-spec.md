@@ -485,7 +485,7 @@ Only symbols that have at least two dots have entries in the index. The idea is 
 
 Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
 
-**Implementation note**: The `indexat` offset can be patched in place, without reallocations, by exploiting the fact that leading whitespace is ignored. In other words emit `(.indexat      )` and overwrite the spaces with the actual offset once it is known.
+**Implementation note**: The `.indexat` offset can be patched in place, without reallocations, by exploiting the fact that whitespace is a separator and can be of variable length. In other words, emit `(.indexat      )` with enough spaces between the directive name and the closing paren to accommodate the final offset (including the `+` sign), and overwrite those spaces with the actual offset (e.g., `+1234`) once it is known.
 
 
 Unused name hints
