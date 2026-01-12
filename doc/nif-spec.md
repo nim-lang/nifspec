@@ -24,7 +24,11 @@ Version 2026
 
 This document describes the **2026** version of NIF. Differences to the original version from 2024:
 
-- The `(.nif24)` directive and other directives have been removed.
+- The `(.nif24)` directive was changed to `(.nif26)`.
+- New directives were added:
+  - `.indexat`
+  - `.unusedname`
+
 - The index structure became an official part of the spec.
 - How symbol names must be formed is more refined.
 - Global symbol names can be shortened by a trailing dot.
@@ -412,10 +416,34 @@ For example in `sysma2dyk.s.nif`:
 Directives
 ----------
 
-A directive looks like an atom like a string literal, an integer literal or a symbol.
+A directive looks like `(.directive ...)`. This is not ambiguous because a node kind cannot
+start with a dot. The existing directives are:
 
-Directives must be at the start of the file, before the module's AST. Directives that are unknown
-to a parser should be ignored.
+- `.nif<version>`: Should be `.nif26`.
+- `.indexat`: Defines the byte offset at which the index structure starts.
+- `.unusedname`: Defines the first available symbol for a code generator that does not occur in the current file.
+- `.vendor`: Defines the vendor of the NIF file. For example `(.vendor "Nifler")`.
+- `.platform`: Defines the platform of the NIF file. For example `(.platform "x86_64")`.
+- `.config`: Defines the configuration of the NIF file. For example `(.config "release")`.
+- `.dialect`: Defines the dialect of the NIF file. For example `(.dialect "nim-parsed")`.
+
+Directives must be at the start of the file, before the module's AST. Directives that are unknown or unsupported by a parser should be ignored.
+
+
+### Version directive
+
+The version directive looks like `(.nif<version>)`. Version is currently always `26`
+because the 2026 version of this NIF spec was released in 2026.
+
+For example:
+
+```nif
+(.nif26)
+```
+
+There must be no whitespace before the version directive so that it also functions as a
+"magic cookie" for tools that use these to determine file types.
+
 
 Conformance
 -----------
@@ -438,7 +466,8 @@ pairs. For example:
 
 
 ```
-+1234
+(.nif26)
+(.indexat +1234)
 (stmts
   (proc :foo.0.suffix ...)
   (var :bar.0.suffix ...)
@@ -460,15 +489,15 @@ Only symbols that have at least two dots have entries in the index. The idea is 
 
 Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
 
+**Implementation note**: The `indexat` offset can be patched in place, without reallocations, by exploiting the fact that leading whitespace is ignored. In other words emit `(.indexat      )` and overwrite the spaces with the actual offset once it is known.
+
 
 Unused name hints
 -----------------
 
-If the second directive is a symbol it indicates the first available symbol for a code generator
-that does not occur in the current file. For example `tmp.14` would tell the NIF processor that
-the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous
-temporary local names.
-
+The `.unusedname` directive looks like `(.unusedname <symbol>)`.
+For example `(.unusedname tmp.14)` would tell the NIF processor that
+the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous temporary local names.
 
 
 NIF trees as identifiers
