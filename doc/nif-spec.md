@@ -460,9 +460,8 @@ A conformant NIF parser should:
 Indexes
 -------
 
-If the first directive is an integer literal it specifies a byte offset into the current file
-that describes where to find the index structure. The index always uses the tag `index` and `kv`
-pairs. For example:
+The `.indexat` directive announces the existence of an index structure in the NIF file.
+The index itself always uses the tag `index` and contains `kv` pairs. It must be at the end of the NIF file. For example:
 
 
 ```
@@ -481,9 +480,6 @@ pairs. For example:
 The offsets are **diff**-based, to keep the resulting numbers shorter. The first entry is relative to +0
 and then the absolute value of entry N is the value of N-1 plus the current entry. In other words, for the
 above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
-
-For clarity: if a file starts with a leading directive `+1000` (meaning the index begins at byte 1000),
-and the index contains entries `+12` and `+23`, the absolute offsets are `12` and `12 + 23 == 35`.
 
 Only symbols that have at least two dots have entries in the index. The idea is that only these symbols are top level entries that are interesting to jump to from outside the current module.
 
