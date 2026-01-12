@@ -153,9 +153,9 @@ SymbolDef ::= ':' Symbol
 ```
 
 
-Roughly speaking that is a "word" that must contain a dot but cannot start with a dot.
+Roughly speaking, that is a "word" that must contain a dot but cannot start with a dot.
 
-For example the 2nd proc named `foo` in a Nim module `m` would typically become `foo.2.m` in NIF.
+For example, the 2nd proc named `foo` in a Nim module `m` would typically become `foo.2.m` in NIF.
 
 Symbols that contain characters that are neither letters nor digits must be escaped via
 backslashes, `\xx` much like it is used in string and character literals.
@@ -165,7 +165,7 @@ the node introducing this symbol. Thus a tool can implement a feature like "goto
 in a language agnostic way without having to know which node kinds introduce new symbols.
 
 There are two kinds of symbols: local and global symbols. A local symbol is of the form `<ident>.<disamb>` where
-`disamb` is a list of digits. For example a name like `foo.0` where the `0` implies it is the first symbol
+`disamb` is a list of digits. For example, a name like `foo.0` where the `0` implies it is the first symbol
 originally named `foo`. The `0` is also called a "disambiguation number". Local symbols are not part of the
 optional lookup index structure.
 
@@ -188,7 +188,7 @@ Number ::= ('+' | '-') Digit+ (FloatingPointPart | 'u')?
 ```
 
 Numbers must start with a plus or a minus and only their decimal notation is supported.
-For example Nim's `0xff` would become `256`.
+For example, Nim's `0xff` would become `256`.
 
 Unsigned numbers always have a `u` suffix. Floating point numbers must contain a dot or `E`.
 Every other number is interpreted as a signed integer.
@@ -275,7 +275,7 @@ programming languages.
 | `inf`    | The floating point value `infinity`. Note: This is not an atom so that it does not conflict with an identifier named `inf`. |
 | `neginf`    | The floating point value `-infinity`. Note: This is not an atom so that it does not conflict with an identifier named `neginf`. |
 | `stmts`   | A list of statements. |
-| `expr`    | A list of statements but ending in an expression. |
+| `expr`    | A list of statements ending in an expression. |
 | `imp`     | An import of a declaration from a different module. |
 | `proc`    | A proc declaration. Note: For Nim `func`, `iterator` etc. are also used. |
 | `type`    | A type declaration. |
@@ -479,7 +479,7 @@ pairs. For example:
 ```
 
 The offsets are **diff**-based, to keep the resulting numbers shorter. The first entry is relative to +0
-and then the absolute value of entry N is the value of N-1 plus the current entry. In other words for the
+and then the absolute value of entry N is the value of N-1 plus the current entry. In other words, for the
 above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
 
 For clarity: if a file starts with a leading directive `+1000` (meaning the index begins at byte 1000),
