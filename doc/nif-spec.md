@@ -24,7 +24,11 @@ Version 2026
 
 This document describes the **2026** version of NIF. Differences to the original version from 2024:
 
-- The `(.nif24)` directive and other directives have been removed.
+- The `(.nif24)` directive was changed to `(.nif26)`.
+- New directives were added:
+  - `.indexat`
+  - `.unusedname`
+
 - The index structure became an official part of the spec.
 - How symbol names must be formed is more refined.
 - Global symbol names can be shortened by a trailing dot.
@@ -149,9 +153,9 @@ SymbolDef ::= ':' Symbol
 ```
 
 
-Roughly speaking that is a "word" that must contain a dot but cannot start with a dot.
+Roughly speaking, that is a "word" that must contain a dot but cannot start with a dot.
 
-For example the 2nd proc named `foo` in a Nim module `m` would typically become `foo.2.m` in NIF.
+For example, the 2nd proc named `foo` in a Nim module `m` would typically become `foo.2.m` in NIF.
 
 Symbols that contain characters that are neither letters nor digits must be escaped via
 backslashes, `\xx` much like it is used in string and character literals.
@@ -161,7 +165,7 @@ the node introducing this symbol. Thus a tool can implement a feature like "goto
 in a language agnostic way without having to know which node kinds introduce new symbols.
 
 There are two kinds of symbols: local and global symbols. A local symbol is of the form `<ident>.<disamb>` where
-`disamb` is a list of digits. For example a name like `foo.0` where the `0` implies it is the first symbol
+`disamb` is a list of digits. For example, a name like `foo.0` where the `0` implies it is the first symbol
 originally named `foo`. The `0` is also called a "disambiguation number". Local symbols are not part of the
 optional lookup index structure.
 
@@ -184,7 +188,7 @@ Number ::= ('+' | '-') Digit+ (FloatingPointPart | 'u')?
 ```
 
 Numbers must start with a plus or a minus and only their decimal notation is supported.
-For example Nim's `0xff` would become `256`.
+For example, Nim's `0xff` would become `256`.
 
 Unsigned numbers always have a `u` suffix. Floating point numbers must contain a dot or `E`.
 Every other number is interpreted as a signed integer.
@@ -271,7 +275,7 @@ programming languages.
 | `inf`    | The floating point value `infinity`. Note: This is not an atom so that it does not conflict with an identifier named `inf`. |
 | `neginf`    | The floating point value `-infinity`. Note: This is not an atom so that it does not conflict with an identifier named `neginf`. |
 | `stmts`   | A list of statements. |
-| `expr`    | A list of statements but ending in an expression. |
+| `expr`    | A list of statements ending in an expression. |
 | `imp`     | An import of a declaration from a different module. |
 | `proc`    | A proc declaration. Note: For Nim `func`, `iterator` etc. are also used. |
 | `type`    | A type declaration. |
@@ -412,10 +416,34 @@ For example in `sysma2dyk.s.nif`:
 Directives
 ----------
 
-A directive looks like an atom like a string literal, an integer literal or a symbol.
+A directive looks like `(.directive ...)`. This is not ambiguous because a node kind cannot
+start with a dot. The existing directives are:
 
-Directives must be at the start of the file, before the module's AST. Directives that are unknown
-to a parser should be ignored.
+- `.nif<version>`: Should be `.nif26`.
+- `.indexat`: Defines the byte offset at which the index structure starts.
+- `.unusedname`: Defines the first available symbol for a code generator that does not occur in the current file.
+- `.vendor`: Defines the vendor of the NIF file. For example `(.vendor "Nifler")`.
+- `.platform`: Defines the platform of the NIF file. For example `(.platform "x86_64")`.
+- `.config`: Defines the configuration of the NIF file. For example `(.config "release")`.
+- `.dialect`: Defines the dialect of the NIF file. For example `(.dialect "nim-parsed")`.
+
+Directives must be at the start of the file, before the module's AST. Directives that are unknown or unsupported by a parser should be ignored.
+
+
+### Version directive
+
+The version directive looks like `(.nif<version>)`. Version is currently always `26`
+because the 2026 version of this NIF spec was released in 2026.
+
+For example:
+
+```nif
+(.nif26)
+```
+
+There must be no whitespace before the version directive so that it also functions as a
+"magic cookie" for tools that use these to determine file types.
+
 
 Conformance
 -----------
@@ -432,13 +460,13 @@ A conformant NIF parser should:
 Indexes
 -------
 
-If the first directive is an integer literal it specifies a byte offset into the current file
-that describes where to find the index structure. The index always uses the tag `index` and `kv`
-pairs. For example:
+The `.indexat` directive announces the existence of an index structure in the NIF file.
+The index itself always uses the tag `index` and contains `kv` pairs. It must be at the end of the NIF file. For example:
 
 
 ```
-+1234
+(.nif26)
+(.indexat +1234)
 (stmts
   (proc :foo.0.suffix ...)
   (var :bar.0.suffix ...)
@@ -450,25 +478,22 @@ pairs. For example:
 ```
 
 The offsets are **diff**-based, to keep the resulting numbers shorter. The first entry is relative to +0
-and then the absolute value of entry N is the value of N-1 plus the current entry. In other words for the
+and then the absolute value of entry N is the value of N-1 plus the current entry. In other words, for the
 above example the offset of `foo.0.suffix` is `12` and the offset of `bar.0.suffix` is `12 + 23 == 35`.
-
-For clarity: if a file starts with a leading directive `+1000` (meaning the index begins at byte 1000),
-and the index contains entries `+12` and `+23`, the absolute offsets are `12` and `12 + 23 == 35`.
 
 Only symbols that have at least two dots have entries in the index. The idea is that only these symbols are top level entries that are interesting to jump to from outside the current module.
 
 Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
 
+**Implementation note**: The `.indexat` offset can be patched in place, without reallocations, by exploiting the fact that whitespace is a separator and can be of variable length. In other words, emit `(.indexat      )` with enough spaces between the directive name and the closing paren to accommodate the final offset (including the `+` sign), and overwrite those spaces with the actual offset (e.g., `+1234`) once it is known.
+
 
 Unused name hints
 -----------------
 
-If the second directive is a symbol it indicates the first available symbol for a code generator
-that does not occur in the current file. For example `tmp.14` would tell the NIF processor that
-the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous
-temporary local names.
-
+The `.unusedname` directive looks like `(.unusedname <symbol>)`.
+For example `(.unusedname tmp.14)` would tell the NIF processor that
+the names `tmp.14`, `tmp.15`, `tmp.16`... do not occur in the NIF file and can be used for non-ambiguous temporary local names.
 
 
 NIF trees as identifiers
