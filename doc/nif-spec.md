@@ -421,13 +421,16 @@ start with a dot. The existing directives are:
 
 - `.nif<version>`: Should be `.nif26`.
 - `.indexat`: Defines the byte offset at which the index structure starts.
+- `.index`: Defines the index structure for random-access of symbols.
 - `.unusedname`: Defines the first available symbol for a code generator that does not occur in the current file.
 - `.vendor`: Defines the vendor of the NIF file. For example `(.vendor "Nifler")`.
 - `.platform`: Defines the platform of the NIF file. For example `(.platform "x86_64")`.
 - `.config`: Defines the configuration of the NIF file. For example `(.config "release")`.
 - `.dialect`: Defines the dialect of the NIF file. For example `(.dialect "nim-parsed")`.
 
-Directives must be at the start of the file, before the module's AST. Directives that are unknown or unsupported by a parser should be ignored.
+All directives except `.index` must be at the start of the file, before the module's AST. `.index` can also be at the end of the file.
+
+Directives that are unknown or unsupported by a parser should be ignored.
 
 
 ### Version directive
@@ -461,7 +464,7 @@ Indexes
 -------
 
 The `.indexat` directive announces the existence of an index structure in the NIF file.
-The index itself always uses the tag `index` and contains `kv` pairs. It must be at the end of the NIF file. For example:
+The index itself always uses the directive `.index` and contains pairs using the tags `x` (for "eXported") or `h` (for "Hidden"). It must be at the end of the NIF file. For example:
 
 
 ```
@@ -471,9 +474,9 @@ The index itself always uses the tag `index` and contains `kv` pairs. It must be
   (proc :foo.0.suffix ...)
   (var :bar.0.suffix ...)
 )
-(index
-  (kv foo.0.suffix +12)
-  (kv bar.0.suffix +23)
+(.index
+  (x foo.0.suffix +12)
+  (x bar.0.suffix +23)
 )
 ```
 
