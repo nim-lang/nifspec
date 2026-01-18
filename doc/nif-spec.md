@@ -395,10 +395,10 @@ Modules
 A complete NIF module consists of a list of directives followed by other CompoundNodes.
 Typically, there is a single root node of kind `stmts`.
 
-Formally a module is simply a non-empty list of `CompoundNode`:
+Formally a module is simply a non-empty list of `Node`:
 
 ```
-NifModule ::= CompoundNode+
+NifModule ::= Node+
 ```
 
 ### Module suffixes
