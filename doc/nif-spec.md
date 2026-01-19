@@ -252,7 +252,7 @@ NodePrefix ::= LineInfo? Comment?
 CompoundNode ::= '(' NodeKind Node* ')'
 ```
 
-The general syntax for a compound node is `(nodekind child1 child2 child3)`.
+The general syntax for a compound node is `(nodekind child1 child2 child3)`. `nodekind` is also called "tag".
 
 That means NIF is a Lisp with some extensions:
 
@@ -260,10 +260,10 @@ That means NIF is a Lisp with some extensions:
 - The ability to annotate a node with a comment. (In Lisp comments are not attached to a node.)
 
 Unlike in Lisp a function `call` is not implied so what is usually just `(f a b c)` in Lisp
-becomes `(call f a b c)` in NIF. The first item in a list (`call` in the example) is called the "node kind".
-There are many different node kinds and the set of node kinds is extensible.
+becomes `(call f a b c)` in NIF. The first item in a list (`call` in the example) is called the "tag".
+There are many different tags and the set of tags is extensible.
 
-However, usually at least the following node kinds exist and ensure a minimum of compatibility between
+However, usually at least the following tags exist and ensure a minimum of compatibility between
 programming languages.
 
 | Node kind | Description                                                                 |
@@ -327,6 +327,22 @@ programming languages.
 | `cons`    | An object/array/etc. constructor. First child is a type. |
 | `lab`    | A label declaration (target of a `jmp`). |
 | `jmp`    | A jump or goto instruction. |
+
+
+Every tag belongs to a "language". A language is a fixed predefined set of tags. The `(.lang)` directive can be used to nest one language in another:
+
+```
+(.nif26)
+(.lang "html")
+(html
+  (a (kv (href) "https://some.url"))
+  (.lang "css"
+    (style (kv (color) "red") (kv (size) "12px"))
+  )
+)
+```
+
+In the context of compilers this can model inline assembler (assuming the assembler uses NIF syntax too) or Nim's `emit` pragma.
 
 
 Line information
@@ -426,9 +442,10 @@ start with a dot. The existing directives are:
 - `.vendor`: Defines the vendor of the NIF file. For example `(.vendor "Nifler")`.
 - `.platform`: Defines the platform of the NIF file. For example `(.platform "x86_64")`.
 - `.config`: Defines the configuration of the NIF file. For example `(.config "release")`.
-- `.dialect`: Defines the dialect of the NIF file. For example `(.dialect "nim-parsed")`.
+- `.lang`: Defines the language the used tags belong to.
+- `.dialect`: Defines the dialect of the NIF file. For example `(.dialect "nim-parsed")`. Obsolete: Use `.lang` instead.
 
-All directives except `.index` must be at the start of the file, before the module's AST. `.index` can also be at the end of the file.
+All directives except `.index` and `.lang` must be at the start of the file, before the module's AST. `.index` can also be at the end of the file. `.lang` can be used anywhere to influence the meaning of the wrapped tags.
 
 Directives that are unknown or unsupported by a parser should be ignored.
 
