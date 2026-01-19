@@ -21,6 +21,43 @@ Highlights
 - Used in production by the Nimony compiler, demonstrating practical applicability.
 
 
+Universal Data Format via Language Contexts
+--------------------------------------------
+
+NIF's `.lang` directive allows different semantic domains to coexist in a single unified syntax.
+Rather than maintaining separate formats (JSON for data, HTML for markup, HTTP for protocols, SQL for databases, etc.),
+each domain can be represented as a different language context:
+
+```nif
+(.lang "html"
+  (div (class "container")
+    (p "Welcome")
+    (.lang "css"
+      (style
+        (kv (background-color) "blue")))))
+
+(.lang "json"
+  (object
+    (kv (name) "Alice")
+    (kv (created) (isodate "2026-01-19"))))
+
+(.lang "sql"
+  (create-table users
+    (column (id) (i +64))
+    (column (name) string)))
+```
+
+With a single NIF parser, the same infrastructure provides:
+- Type-safe representation (via extensible tags)
+- Origin tracking (line/column/filename on every node)
+- Unified module system (imports, namespacing)
+- Composable embedding (languages can nest)
+- Optional indexing for random access
+
+This reduces implementation burden: instead of multiple parsers, type systems, and serialization formats,
+different semantic domains use a shared structure with scoped semantics.
+
+
 Documentation
 -------------
 
