@@ -532,7 +532,7 @@ accomplishes this task:
 
 `(` is turned into `A`.
 `)` is turned into `Z`.
-A space that separates the children of a compound node is turned into `S`.
+A space that separates the children of a compound node is turned into `_`.
 
 The empty node (`.`) is encoded as `E`.
 
@@ -544,7 +544,7 @@ been emitted. But only if `R<x>` is still shorter than the symbol/identifier.
 
 For example:
 
-`(tag abcdef . abcdef)` is encoded as `AtagSabcdefSESR0`.
+`(tag abcdef . abcdef)` is encoded as `Atag_abcdef_E_R0`.
 
 Characters like `A` and `Z` that are used in the encoding must be
 escaped should they occur. The encoding is `X<xx>` where `xx` is the
@@ -558,7 +558,7 @@ In summary:
 | `A`    | begin of a compound node `(` |
 | `Z`   | end of a compound node `)`  |
 | `E`   | the empty node |
-| `S`   | space; separator between a node's children |
+| `_`   | space; separator between a node's children |
 | `O`   | encodes the colon in a SymbolDef |
 | `U`   | encodes the `"` that is used to delimit string literals |
 | `X` | used to escape the letters used in this encoding and in general for characters that should not be used in an identifier |
@@ -575,4 +575,30 @@ Becomes:
 
 Which then is turned into:
 
-`AarrayArangeS0S9ZAK0AK1S0S4ZAiS8`
+`AarrayArange_0_9ZAK0AK1_0_4ZAi_8`
+
+
+Paths/URLs as NIF trees
+-----------------------
+
+The `a` tag is used for absolute paths, and `p` for relative paths. A relative path is followed by a number
+indicating the level of required parent directory navigations: +0 is `./`, +1 is `../`, +2 is `../../` and
+so on.
+
+The individual path components become NIF identifiers. They are subject to the general escape mechanism via the backslash-hex-hex notation. A file extension is represented as the NIF empty node dot followed by the pure extension
+as a NIF identifier. This means `file.txt` becomes `file . txt` in NIF.
+
+Likewise a URL can be encoded as `(protocol url parts)`.
+
+These NIF trees can then turned into identifiers via the "NIF trees as identifiers" algorithm.
+
+Examples:
+
+| path |  NIF representation | as identifier |
+| ---- | ------------------- | --------------|
+| `/usr/bin/foo` | `(a usr bin foo)` | `Aa_usr_bin_foo` |
+| `foobar` | `(p +0 foobar)` | `Ap_0_foobar` |
+| `./foobar` | `(p +0 foobar)` | `Ap_0_foobar` |
+| `file.txt` | `(p +0 file . txt)` | `Ap_0_file_E_txt` |
+| `../../foo/bar.txt` | `(p +2 foo bar . txt)` | `Ap_2_foo_bar_E_txt` |
+| `https://github.com/nifspec` | `(https github . com nifspec)` | `Ahttps_github_E_com_nifspec` |
