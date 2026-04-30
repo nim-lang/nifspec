@@ -483,8 +483,7 @@ Directives that are unknown or unsupported by a parser should be ignored.
 
 ### Version directive
 
-The version directive looks like `(.nif<version>)`. Version is currently always `27`
-because the 2027 version of this NIF spec was released in 2027.
+The version directive looks like `(.nif<version>)`.
 
 For example:
 
