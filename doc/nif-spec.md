@@ -2,9 +2,9 @@ NIF data format
 ===============
 
 The NIF data format is a text based file format designed for compiler frontend/backend
-communication or communication between different programming languages. The design is
-heavily tied to Nim's requirements. However, the design works on language agnostic ASTs
-and is so extensible that other programming languages work well with it too.
+communication, configuration files, data exchange between different programming languages
+and similar use cases. The design works on language agnostic ASTs and is so extensible
+that many programming languages work well with it.
 
 A NIF file corresponds to a "module" in the source language. The module is stored as an AST.
 The AST consists of "atoms" and "compound nodes".
@@ -19,19 +19,26 @@ There is also an optional **index structure** that maps symbols to offsets withi
 This makes NIF a hybrid between a binary and a text file.
 
 
-Version 2026
+Version 2027
 ------------
 
-This document describes the **2026** version of NIF. Differences to the original version from 2024:
+This document describes the **2027** version of NIF. Differences to the 2026 version:
 
-- The `(.nif24)` directive was changed to `(.nif26)`.
-- New directives were added:
-  - `.indexat`
-  - `.unusedname`
-
-- The index structure became an official part of the spec.
-- How symbol names must be formed is more refined.
-- Global symbol names can be shortened by a trailing dot.
+- The `(.nif26)` directive was changed to `(.nif27)`.
+- Line information moved from a node *prefix* to a node *suffix*. It is introduced
+  by `@`, written immediately after an atom or after a tag name with **no** intervening
+  whitespace. Examples: `"abc"@5,3`, `123@5,3,foo.nim`, `(tag@5,3 child child)`.
+- A leading negative `~` may introduce a line-info suffix on its own without `@`,
+  saving one byte for the very common infix case: `~3` is shorthand for `@~3`.
+- Line-information numbers are encoded in **base62** (`0-9A-Za-z`), not decimal.
+  Filenames are unaffected.
+- Comments also became suffixes. They follow the line information (if any) with no
+  whitespace in between. The general suffix shape is `<atom-or-tag>@<info>#<comment>#`,
+  where both parts are optional.
+- Numbers no longer require a leading `+`. Bare `12` is the integer twelve. Negative
+  numbers still require a leading `-` (`-12`). The `~` sign is reserved for line-info
+  diffs.
+- `@` was added to the set of control characters.
 
 
 Example NIF module
@@ -41,8 +48,8 @@ In order to get a feeling for how a NIF file can look, here is a complete exampl
 
 ```nif
 (stmts
-(imp 2,5,sysio.nim(type :File (object ..)))
-(imp (proc :write.1.sys . (pragmas varargs) (params (param f File)).))
+(imp@2,5,sysio.nim (type :File (object . .)))
+(imp (proc :write.1.sys . (pragmas varargs) (params (param f File)) .))
 (call write.1.sys "Hello World!\0A")
 )
 ```
@@ -53,7 +60,7 @@ Encoding
 --------
 
 A NIF file is stored as a sequence of bytes ("octets"). No Unicode validation steps are
-required; parsers operate on raw bytes. While UTF‑8 is commonly used, it is not mandated.
+required; parsers operate on raw bytes. While UTF-8 is commonly used, it is not mandated.
 Importantly, any byte with value >= 128 may be used directly in identifiers and
 literals without escaping — the set of control characters that must be escaped is
 restricted to ASCII characters only (see "Control characters" below).
@@ -74,14 +81,14 @@ Control characters
 
 NIF uses a small set of ASCII control characters (for example `(`, `)` and `~`) to describe
 AST structure. These characters **must not** occur literally in string literals, char
-literals, or comments because a parser relies on them to find matching delimiters.
-They may, however, be represented inside literals or comments or identifiers or symbols when escaped using the
-hex escape `\xx` (see "Escape sequences").
+literals, identifiers or symbols because a parser relies on them to find matching delimiters
+and suffix introducers. They may, however, be represented inside literals or comments or
+identifiers or symbols when escaped using the hex escape `\xx` (see "Escape sequences").
 
 The control characters are the following ASCII bytes:
 
 ```
-( )  [ ]  { }  ~  #  '  "  \  :
+( )  [ ]  { }  ~  #  '  "  \  :  @
 ```
 
 Escape sequences
@@ -91,7 +98,7 @@ Grammar:
 
 ```
 HexChar ::= [0-9A-F]
-Escape ::= '\' HexChar HexChar
+Escape  ::= '\' HexChar HexChar
 ```
 
 String and character literals support escape sequences via backslashes quite like in other
@@ -130,11 +137,12 @@ The most common atom is the "identifier". Its spelling must adhere to the gramma
 
 ```
 IdentStart ::= <ascii_letter> | '_' | NonAscii | Escape
-IdentChar ::= IdentStart | [_0-9]
-Identifier ::= IdentStart+ IdentChar*
-NonAscii ::= byte value >= 128
+IdentChar  ::= IdentStart | [_0-9]
+Identifier ::= IdentStart IdentChar*
+NonAscii   ::= byte value >= 128
 ```
 
+Identifiers cannot start with a digit, so a number and an identifier are never ambiguous.
 Identifiers have no real meaning; in particular it **cannot** be assumed that two identifiers
 with the same sequence of bytes (for example `abc`) refer to the same entity.
 
@@ -148,7 +156,7 @@ must be escaped using backslashes `\xx`, the same escape form used for string an
 A "symbol" is a name that refers to an entity unambiguously. A symbol must adhere to the grammar:
 
 ```
-Symbol ::= IdentStart IdentChar* '.' (IdentChar | '.')*
+Symbol    ::= IdentStart IdentChar* '.' (IdentChar | '.')*
 SymbolDef ::= ':' Symbol
 ```
 
@@ -182,19 +190,21 @@ is immediately expanded during parsing to `foo.0.modname` assuming the file bein
 Grammar:
 
 ```
-Digit ::= [0-9]
+Digit             ::= [0-9]
 FloatingPointPart ::= ('.' Digit+ ('E' ('+' | '-')? Digit+)? ) | 'E' ('+' | '-')? Digit+
-Number ::= ('+' | '-') Digit+ (FloatingPointPart | 'u')?
+Number            ::= '-'? Digit+ (FloatingPointPart | 'u')?
 ```
 
-Numbers must start with a plus or a minus and only their decimal notation is supported.
-For example, Nim's `0xff` would become `256`.
+Numbers use decimal notation only; for example, Nim's `0xff` becomes `255`.
+
+Positive numbers do **not** require a leading `+`; bare `12` is the integer twelve.
+Negative numbers carry a leading `-` (e.g. `-12`).
 
 Unsigned numbers always have a `u` suffix. Floating point numbers must contain a dot or `E`.
 Every other number is interpreted as a signed integer.
 
-Note that numbers that do not start with a plus nor a minus are interpreted as "line information". See
-the corresponding section for more details.
+Because identifiers cannot start with a digit and line information is now introduced by
+`@` or a leading `~` (see "Line information"), a leading digit unambiguously starts a number.
 
 
 ### Char literals
@@ -215,7 +225,7 @@ Char literals are enclosed in single quotes. The only supported escape sequence 
 Grammar:
 
 ```
-EscapedData ::= (VisibleChar | Escape | Whitespace)*
+EscapedData   ::= (VisibleChar | Escape | Whitespace)*
 StringLiteral ::= '"' EscapedData '"'
 ```
 
@@ -242,22 +252,29 @@ Compound nodes
 Grammar:
 
 ```
-Atom ::= Empty | Identifier | Symbol | SymbolDef | Number | CharLiteral |
-         StringLiteral
+B62Digit ::= [0-9A-Za-z]
+LineDiff ::= B62Digit* | '~' B62Digit+
+LineInfo ::= ('@' | &'~') LineDiff (',' LineDiff (',' EscapedData)?)?
+Comment  ::= '#' EscapedData '#'
+Suffix   ::= LineInfo? Comment?
 
+Atom     ::= ( Empty | Identifier | Symbol | SymbolDef | Number
+             | CharLiteral | StringLiteral ) Suffix
 NodeKind ::= Identifier
+TagHead  ::= NodeKind Suffix
 
-Node ::= NodePrefix (Atom | CompoundNode)
-NodePrefix ::= LineInfo? Comment?
-CompoundNode ::= '(' NodeKind Node* ')'
+Node     ::= Atom | CompoundNode
+CompoundNode ::= '(' TagHead Node* ')'
 ```
 
-The general syntax for a compound node is `(nodekind child1 child2 child3)`. `nodekind` is also called "tag".
+The general syntax for a compound node is `(nodekind child1 child2 child3)`. `nodekind`
+is also called the "tag". An optional line-information and/or comment suffix may appear
+*directly* after the tag name (no whitespace).
 
 That means NIF is a Lisp with some extensions:
 
-- The ability to annotate (line, column, filename) information for a node.
-- The ability to annotate a node with a comment. (In Lisp comments are not attached to a node.)
+- The ability to annotate (line, column, filename) information for any atom or compound node.
+- The ability to annotate any atom or compound node with a comment.
 
 Unlike in Lisp a function `call` is not implied so what is usually just `(f a b c)` in Lisp
 becomes `(call f a b c)` in NIF. The first item in a list (`call` in the example) is called the "tag".
@@ -332,7 +349,7 @@ programming languages.
 Every tag belongs to a "language". A language is a fixed predefined set of tags. The `(.lang)` directive can be used to nest one language in another:
 
 ```
-(.nif26)
+(.nif27)
 (.lang "html")
 (html
   (a (kv (href) "https://some.url"))
@@ -351,33 +368,47 @@ Line information
 Grammar:
 
 ```
-LineDiff ::= Digit* | '~' Digit+
-LineInfo ::= LineDiff (',' LineDiff (',' EscapedData)?)?
+B62Digit ::= [0-9A-Za-z]
+LineDiff ::= B62Digit* | '~' B62Digit+
+LineInfo ::= ('@' | &'~') LineDiff (',' LineDiff (',' EscapedData)?)?
 ```
 
-Every node can be prefixed with a digit or `~` or `,` to add source code information.
-("This node originates from file.nim(line,col).")
-There are 3 forms:
+Any atom and any tag name can be followed (with **no** intervening whitespace) by line
+information of the form `@<col-diff>` or `@<col-diff>,<line-diff>` or
+`@<col-diff>,<line-diff>,<filename>`. Examples:
 
-1. `<column-diff>`
-2. `<column-diff, line-diff>`
-3. `<column, line, filename>`
+```
+123@5
+"hello"@5,3
+foo@5,3,foo.nim
+(call@5,3 a b c)
+```
 
-The `diff` means that the value is relative to the parent node. For example `8` means that the node is at
-the same position as the parent node except that its column is `+8` characters. Negative numbers use the tilde
-and not the minus. Negative numbers are usually required for "infix" nodes where the left hand operand
-precedes the parent (`x + y` becomes
-`(infix add ~3 x 2 y)` because `x` is written before the `+` operator).
+The `diff` portions are values relative to the parent node. For example `5` means that the
+node is at the same position as the parent node except that its column is `+5` characters.
+Negative numbers carry a leading `~` (e.g. `~3` for "column - 3"). Negative numbers are
+typically required for "infix" nodes where the left-hand operand precedes the parent
+(`x + y` becomes `(infix add ~3 x 2 y)` because `x` is written before the `+` operator).
 
-The AST root node can only be annotated with the form `<column, line, filename>` as it has no parent node
-that column and line could refer to.
+Wait — that example uses the *old* prefix syntax. With suffix line info the same expression
+becomes `(infix add x@~3 y@2)`: the operands carry their own diffs relative to the parent.
 
-Note that numeric literals in NIF have to start with `+` or `-` and thus cannot cause ambiguity with line
-information.
+**Diff numbers are written in base 62** using the digits `0-9A-Za-z`, where `A` = 10,
+`Z` = 35, `a` = 36, `z` = 61. This shrinks line-information bytes by roughly 45% over
+decimal. Filenames are not affected — they are arbitrary `EscapedData`.
 
-Since the information includes both lines and columns it can easily take up 10-20% of the file size.
-Therefore a mere digit starts a line information and not a numeric literal. Numeric literals are not
-nearly as frequent in practice.
+**Shorthand for negative leading diffs**: when the very first diff is negative, the leading
+`@` may be omitted, because `~` already marks the start of a line-information suffix.
+So `atom~3` is shorthand for `atom@~3`. The shorthand only applies to the first segment;
+to write a line info whose first diff is positive one must use `@`.
+
+The AST root node can only be annotated with the form `<col,line,filename>` as it has no
+parent node that column and line could refer to. Place this annotation directly after the
+root tag name: `(stmts@1,1,foo.nim …)`.
+
+Since line information includes both lines and columns it can easily take up 10-20% of the
+file size for compiler-emitted ASTs. Therefore base62 is used and the leading `@` can be
+omitted when the first diff is already negative.
 
 
 Comments
@@ -389,20 +420,20 @@ Grammar:
 Comment ::= '#' EscapedData '#'
 ```
 
-Every node can be prefixed with `#` to add a comment to the particular node. The comment
-also has to end with a `#`.
+Any atom and any tag name can be followed (with **no** intervening whitespace) by a comment.
+If both a line-information suffix and a comment are present, line information must come first
+and the comment immediately follows it (still no whitespace).
 
-For example:
+Examples:
 
 ```nif
-# This performs an add.#(add x y)
+(add#performs an addition# x y)
+123#answer#
+foo@5,3#why this token is here#
 ```
 
-Note how the comment ends at `#`. This is not ambiguous as any control character within a
-comment would have to be escaped via `\xx`.
-
-If a node is annotated both with line information and a comment the line information has
-to come first.
+The comment ends at the next `#`. This is not ambiguous because any control character within
+a comment would have to be escaped via `\xx`.
 
 
 Modules
@@ -435,7 +466,7 @@ Directives
 A directive looks like `(.directive ...)`. This is not ambiguous because a node kind cannot
 start with a dot. The existing directives are:
 
-- `.nif<version>`: Should be `.nif26`.
+- `.nif<version>`: Should be `.nif27`.
 - `.indexat`: Defines the byte offset at which the index structure starts.
 - `.index`: Defines the index structure for random-access of symbols.
 - `.unusedname`: Defines the first available symbol for a code generator that does not occur in the current file.
@@ -452,13 +483,13 @@ Directives that are unknown or unsupported by a parser should be ignored.
 
 ### Version directive
 
-The version directive looks like `(.nif<version>)`. Version is currently always `26`
-because the 2026 version of this NIF spec was released in 2026.
+The version directive looks like `(.nif<version>)`. Version is currently always `27`
+because the 2027 version of this NIF spec was released in 2027.
 
 For example:
 
 ```nif
-(.nif26)
+(.nif27)
 ```
 
 There must be no whitespace before the version directive so that it also functions as a
@@ -473,6 +504,7 @@ A conformant NIF parser should:
 - Accept the module as a sequence of bytes and tolerate non-UTF-8 content.
 - Allow bytes with value >= 128 in identifiers and string/char literals without requiring escapes.
 - Support the `\xx` escape form for representing arbitrary byte values (including escaping control characters and `\` as `\5C`).
+- Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
 - Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
 
@@ -485,15 +517,15 @@ The index itself always uses the directive `.index` and contains pairs using the
 
 
 ```
-(.nif26)
-(.indexat +1234)
+(.nif27)
+(.indexat 1234)
 (stmts
   (proc :foo.0.suffix ...)
   (var :bar.0.suffix ...)
 )
 (.index
-  (x foo.0.suffix +12)
-  (x bar.0.suffix +23)
+  (x foo.0.suffix 12)
+  (x bar.0.suffix 23)
 )
 ```
 
@@ -505,7 +537,7 @@ Only symbols that have at least two dots have entries in the index. The idea is 
 
 Indexes are optional and can be recomputed. The recomputation can also be used for validation. The implementation ships with such a tool called `nifindex`.
 
-**Implementation note**: The `.indexat` offset can be patched in place, without reallocations, by exploiting the fact that whitespace is a separator and can be of variable length. In other words, emit `(.indexat      )` with enough spaces between the directive name and the closing paren to accommodate the final offset (including the `+` sign), and overwrite those spaces with the actual offset (e.g., `+1234`) once it is known.
+**Implementation note**: The `.indexat` offset can be patched in place, without reallocations, by exploiting the fact that whitespace is a separator and can be of variable length. In other words, emit `(.indexat      )` with enough spaces between the directive name and the closing paren to accommodate the final offset, and overwrite those spaces with the actual offset (e.g., `1234`) once it is known.
 
 
 Unused name hints
@@ -523,11 +555,10 @@ In many cases it is useful to turn a NIF tree into a canonical string representa
 forms a valid identifier (for code generation or otherwise). The following encoding scheme
 accomplishes this task:
 
-1. Line information and comments are ignored.
-2. The unary `+` for numbers is removed.
-3. The substring of trailing `)` is removed as there is nothing interesting about `))))`.
-4. Whitespace is canonicalized to a single space.
-5. The space after `)` and before `(` is removed.
+1. Line information and comments (the `Suffix` parts) are ignored.
+2. The substring of trailing `)` is removed as there is nothing interesting about `))))`.
+3. Whitespace is canonicalized to a single space.
+4. The space after `)` and before `(` is removed.
 
 
 `(` is turned into `A`.
@@ -567,7 +598,7 @@ In summary:
 
 For example:
 
-`(array (range +0 +9) (array (range +0 +4) (i +8))))`
+`(array (range 0 9) (array (range 0 4) (i 8))))`
 
 Becomes:
 
@@ -582,7 +613,7 @@ Paths/URLs as NIF trees
 -----------------------
 
 The `a` tag is used for absolute paths, and `p` for relative paths. A relative path is followed by a number
-indicating the level of required parent directory navigations: +0 is `./`, +1 is `../`, +2 is `../../` and
+indicating the level of required parent directory navigations: 0 is `./`, 1 is `../`, 2 is `../../` and
 so on.
 
 The individual path components become NIF identifiers. They are subject to the general escape mechanism via the backslash-hex-hex notation. A file extension is represented as the NIF empty node dot followed by the pure extension
@@ -597,8 +628,8 @@ Examples:
 | path |  NIF representation | as identifier |
 | ---- | ------------------- | --------------|
 | `/usr/bin/foo` | `(a usr bin foo)` | `Aa_usr_bin_foo` |
-| `foobar` | `(p +0 foobar)` | `Ap_0_foobar` |
-| `./foobar` | `(p +0 foobar)` | `Ap_0_foobar` |
-| `file.txt` | `(p +0 file . txt)` | `Ap_0_file_E_txt` |
-| `../../foo/bar.txt` | `(p +2 foo bar . txt)` | `Ap_2_foo_bar_E_txt` |
+| `foobar` | `(p 0 foobar)` | `Ap_0_foobar` |
+| `./foobar` | `(p 0 foobar)` | `Ap_0_foobar` |
+| `file.txt` | `(p 0 file . txt)` | `Ap_0_file_E_txt` |
+| `../../foo/bar.txt` | `(p 2 foo bar . txt)` | `Ap_2_foo_bar_E_txt` |
 | `https://github.com/nifspec` | `(https github . com nifspec)` | `Ahttps_github_E_com_nifspec` |
