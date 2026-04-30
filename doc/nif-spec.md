@@ -39,6 +39,9 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
   numbers still require a leading `-` (`-12`). The `~` sign is reserved for line-info
   diffs.
 - `@` was added to the set of control characters.
+- New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
+  the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
+  over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
 
 
 Example NIF module
@@ -97,20 +100,34 @@ Escape sequences
 Grammar:
 
 ```
-HexChar ::= [0-9A-F]
-Escape  ::= '\' HexChar HexChar
+HexChar    ::= [0-9A-F]
+ShortChar  ::= 'n' | 't' | 'r' | '|' | '^'
+Escape     ::= '\' (HexChar HexChar | ShortChar)
 ```
 
-String and character literals support escape sequences via backslashes quite like in other
-languages. Unlike other languages only `\xx` where `xx` stands for the ASCII value that is
-encoded is supported. Characters of a value < 32 (space) have to be encoded as `\xx` too.
+String and character literals, comments, identifiers and symbols support escape sequences
+via backslashes. The primary form is `\xx` where `xx` is two upper-case hexadecimal digits
+that spell the ASCII value of the encoded byte. For example, a binary zero is `\00`.
 
-For example, a binary zero in a string literal is written as `"\00"`.
+In addition, the following two-byte shortcuts are accepted:
+
+| Shortcut | Decoded byte | Meaning             |
+|----------|--------------|---------------------|
+| `\n`     | `\x0A`       | newline             |
+| `\t`     | `\x09`       | tab                 |
+| `\r`     | `\x0D`       | carriage return     |
+| `\|`     | `\x5C`       | a literal backslash |
+| `\^`     | `\x22`       | a literal `"`       |
 
 *Caution*: The commonly used `"\\"` in other languages that escapes the backslash itself
-is not supported either and must be written as `\5C`!
+is **not** supported. Use `\|` or `\5C`.
 
-*Rationale*: Ease of implementation.
+*Rationale*: Each shortcut body byte (`n`, `t`, `r`, `|`, `^`) is neither a hexadecimal
+digit nor a NIF control character, so a single byte of look-ahead after `\` unambiguously
+selects between "two-hex-digit form" and "one-byte shortcut form". This keeps simple
+metacharacter scanners (regex-based or hand-written) easy to write: an escape sequence is
+always `\` plus *exactly* one or two more bytes, decided by inspecting the byte after `\`
+in isolation.
 
 
 Atoms
