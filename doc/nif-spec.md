@@ -233,7 +233,8 @@ VisibleChar ::= ASCII value >= 32 but not a control character | byte value >= 12
 CharLiteral ::= '\'' (VisibleChar | Escape) '\''
 ```
 
-Char literals are enclosed in single quotes. The only supported escape sequence is `\xx`.
+Char literals are enclosed in single quotes. Escapes are as defined under **Escape sequences**
+(the canonical `\xx` form and the same `\n`, `\t`, `\r`, `\|`, `\^` shortcuts).
 
 
 ### String literals
@@ -246,7 +247,8 @@ EscapedData   ::= (VisibleChar | Escape | Whitespace)*
 StringLiteral ::= '"' EscapedData '"'
 ```
 
-String literals are enclosed in double quotes. The only supported escape sequence is `\xx`.
+String literals are enclosed in double quotes. Escapes are as defined under **Escape sequences**
+(`\xx` plus the `\n`, `\t`, `\r`, `\|`, `\^` shortcuts). Note again that `\\` is **not** an escape.
 Whitespace, even including newlines, can be part of the string literal without having to
 escape it.
 
@@ -271,7 +273,8 @@ Grammar:
 ```
 B62Digit ::= [0-9A-Za-z]
 LineDiff ::= B62Digit* | '~' B62Digit+
-LineInfo ::= ('@' | &'~') LineDiff (',' LineDiff (',' EscapedData)?)?
+LineInfo ::= '@' LineDiff (',' LineDiff (',' EscapedData)?)?
+           | '~' B62Digit+ (',' LineDiff (',' EscapedData)?)?
 Comment  ::= '#' EscapedData '#'
 Suffix   ::= LineInfo? Comment?
 
@@ -283,6 +286,9 @@ TagHead  ::= NodeKind Suffix
 Node     ::= Atom | CompoundNode
 CompoundNode ::= '(' TagHead Node* ')'
 ```
+
+In `LineInfo`, the second alternative is the **leading-`~` shorthand**: when the first column
+diff is negative, `@` may be omitted because `~` already begins the suffix (see **Line information**).
 
 The general syntax for a compound node is `(nodekind child1 child2 child3)`. `nodekind`
 is also called the "tag". An optional line-information and/or comment suffix may appear
@@ -387,7 +393,8 @@ Grammar:
 ```
 B62Digit ::= [0-9A-Za-z]
 LineDiff ::= B62Digit* | '~' B62Digit+
-LineInfo ::= ('@' | &'~') LineDiff (',' LineDiff (',' EscapedData)?)?
+LineInfo ::= '@' LineDiff (',' LineDiff (',' EscapedData)?)?
+           | '~' B62Digit+ (',' LineDiff (',' EscapedData)?)?
 ```
 
 Any atom and any tag name can be followed (with **no** intervening whitespace) by line
@@ -403,12 +410,10 @@ foo@5,3,foo.nim
 
 The `diff` portions are values relative to the parent node. For example `5` means that the
 node is at the same position as the parent node except that its column is `+5` characters.
-Negative numbers carry a leading `~` (e.g. `~3` for "column - 3"). Negative numbers are
-typically required for "infix" nodes where the left-hand operand precedes the parent
-(`x + y` becomes `(infix add ~3 x 2 y)` because `x` is written before the `+` operator).
-
-Wait — that example uses the *old* prefix syntax. With suffix line info the same expression
-becomes `(infix add x@~3 y@2)`: the operands carry their own diffs relative to the parent.
+Negative numbers carry a leading `~` (e.g. `~3` for "column - 3"). Negative leading column
+diffs are typical for operands that appear **before** the syntactic construct named by the
+parent tag—for instance `x + y` might become `(infix add x~3 y@2)` (equivalently
+`x@~3`): each operand carries its column diff relative to the `infix` node.
 
 **Diff numbers are written in base 62** using the digits `0-9A-Za-z`, where `A` = 10,
 `Z` = 35, `a` = 36, `z` = 61. This shrinks line-information bytes by roughly 45% over
