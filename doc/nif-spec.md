@@ -654,3 +654,228 @@ Examples:
 | `file.txt` | `(p 0 file . txt)` | `Ap_0_file_E_txt` |
 | `../../foo/bar.txt` | `(p 2 foo bar . txt)` | `Ap_2_foo_bar_E_txt` |
 | `https://github.com/nifspec` | `(https github . com nifspec)` | `Ahttps_github_E_com_nifspec` |
+
+
+BIF — binary NIF
+----------------
+
+`BIF` ("**B**inary N**IF**") is a **binary** encoding of NIF: the same AST a text
+NIF file describes, laid out as a fixed-width token array plus a few string
+tables. It is a fully specified, first-class encoding of NIF — not a private
+cache format — and converts to and from text NIF losslessly (the reference
+implementation ships a `niftools bif2nif` / `nif2bif` tool for exactly this).
+
+BIF trades the text form's diffability and human-readability for load speed and
+size: a text load costs a full tokenizer/parser pass and the text is several times
+larger, whereas a BIF file already *is* the token stream, so loading it is one
+bulk read of the token block and a re-intern of the string pools — no parsing.
+That makes it the natural on-disk form for a compiler cache, but nothing about the
+format is cache-specific.
+
+BIF is defined to be **little-endian**: the token block and the `indexOffset`
+field are contiguous little-endian words, so a decoder can read (or memory-map)
+them directly without byte-swapping. The magic cookie carries a fixed endianness
+byte (`0` = little) and a version, so a foreign or wrong-version file is *rejected*
+(not misread); a big-endian producer is unsupported. The host **word size** never
+appears in the format — a token is always 32 bits — so a BIF file is identical on
+32- and 64-bit hosts.
+
+### Token words
+
+A token is a **32-bit little-endian word**. Its low 4 bits are the **kind**; the
+high 28 bits are a kind-specific **payload**:
+
+```
+  bit 31                              bit 4  bit 3   bit 0
+  +-----------------------------------------+-------------+
+  |               payload (28 bits)         |  kind (4)   |
+  +-----------------------------------------+-------------+
+```
+
+There is **no** separate open/close-paren token: a compound node is one `TagLit`
+whose payload carries a *jump* count of the body tokens that follow it; its close
+is implicit. The twelve kinds, by their 4-bit value:
+
+| kind | name | payload holds |
+| ---- | ---- | ------------- |
+| 0 | `DotToken`       | nothing — the empty node `.` |
+| 1 | `CharLit`        | a byte value `0 … 255` |
+| 2 | `StrLit`         | a string: inline bytes, or a `strings`-pool id |
+| 3 | `IntLit`         | a signed integer, stored inline |
+| 4 | `UIntLit`        | an unsigned integer, stored inline |
+| 5 | `FloatLit`       | an IEEE-754 `float64` bit pattern, stored inline |
+| 6 | `Symbol`         | a symbol use: inline bytes, or a `syms`-pool id |
+| 7 | `SymbolDef`      | a symbol definition: inline bytes, or a `syms`-pool id |
+| 8 | `Ident`          | an identifier: inline bytes, or a `strings`-pool id |
+| 9 | `TagLit`         | a tag id + a body length (*jump*) |
+| 10 | `ExtendedSuffix` | 28 more high bits for the immediately preceding token |
+| 11 | `LineInfoLit`   | a source-position suffix on the preceding *head* token |
+
+Payload bit numbering below is relative to the payload (bit 0 of the payload is
+bit 4 of the word).
+
+**`ExtendedSuffix` — the widening mechanism.** Several kinds carry values wider
+than 28 bits. The wide bits live in one or more `ExtendedSuffix` tokens placed
+*immediately after* the kinded token, each contributing the next-higher 28 bits:
+
+```
+  value = payload(head)
+        | payload(suffix₁) << 28
+        | payload(suffix₂) << 56
+```
+
+Putting the extension *after* the head means a cursor always lands on the kinded
+token and reads its kind with a single mask; only decoders that need the wide bits
+walk the suffixes. A head carries 0, 1 or 2 `ExtendedSuffix` words (a `LineInfoLit`
+may carry more, see below), and the number is recovered structurally — every
+`ExtendedSuffix` immediately following a head belongs to it — so no separate length
+field is needed.
+
+**`TagLit` (compound node).** The 28-bit payload is `tag | jump`:
+
+```
+  payload bits [8..0]    tag id — index into the `tags` pool (0 … 511)
+  payload bits [27..9]   jump   — body-token count (0 … 524287)
+```
+
+The node consists of the `TagLit` followed by exactly *jump* more tokens, its
+children (each child may itself be a subtree, so *jump* counts the whole flattened
+body). A body longer than 524287 tokens sets *jump* to its low 19 bits and appends
+one `ExtendedSuffix` whose 28 bits are the high part, giving a 47-bit jump.
+
+**Strings — `StrLit`, `Ident`, `Symbol`, `SymbolDef`.** Payload bit 0 selects the
+storage mode:
+
+- **inline** (bit 0 = `1`): up to three bytes packed into the word — bits [2..1]
+  are the length `0 … 3`, and bits [26..3] hold the bytes, byte *i* at bits
+  `[3 + 8·i .. 10 + 8·i]`. No pool entry is used.
+- **pool id** (bit 0 = `0`): the payload is `id << 1`; the id indexes the
+  `strings` pool for `StrLit`/`Ident` and the `syms` pool for `Symbol`/`SymbolDef`.
+  An id whose `id << 1` exceeds 28 bits appends one `ExtendedSuffix`, giving a
+  56-bit id.
+
+`SymbolDef` marks the token that *introduces* a symbol (the text form's leading
+`:`); `Symbol` is a use.
+
+**`CharLit`.** The payload is the byte value `0 … 255`.
+
+**`IntLit` (signed).** The value is stored inline, sign-extended, in the shortest
+carrier whose **signed** width holds it: 28 bits (one token) for `[-2²⁷, 2²⁷)`,
+56 bits (one `ExtendedSuffix`) for `[-2⁵⁵, 2⁵⁵)`, else 84 bits (two suffixes). The
+carrier width is chosen by signed range, *not* unsigned magnitude: a positive value
+whose top carrier bit is set still takes the wider carrier, so the decoder's
+"sign-extend from the carrier width" recovers it correctly.
+
+**`UIntLit` / `FloatLit`.** The bits (the unsigned value, or the `float64`'s raw
+IEEE-754 bit pattern) are stored inline low-28-bits-first, using the fewest
+`ExtendedSuffix` words that cover all set bits.
+
+**`LineInfoLit` (source position).** An optional suffix that attaches an *absolute*
+source position to the preceding head token (BIF stores positions absolutely,
+unlike the text index's byte diffs). It encodes a filename (an id into the
+`filenames` pool), a line and a column, and an optional `#…#` comment (an id into
+the `strings` pool). Two fixed layouts are selected **structurally**, by how many
+`ExtendedSuffix` words trail the `LineInfoLit` (`k`):
+
+- `k = 0` — *common* 28-bit layout, no comment:
+  `col` in bits [6..0] (0 … 127), `file` in bits [13..7] (0 … 127), `line` in bits
+  [27..14] (0 … 16383).
+- `k = 1` — *wide* 56-bit layout, no comment:
+  `col` (10 bits), `file` (14 bits), `line` (32 bits), laid out low-to-high across
+  the head payload and its one suffix.
+- `k ≥ 2` — wide layout **plus** a comment: the extra suffix word(s) after the
+  position carry the comment's `strings`-pool id in 28-bit chunks, low first (a
+  second such word only for ids ≥ 2²⁸).
+
+A comment always forces the wide layout, so `k` decodes the shape unambiguously.
+`LineInfoLit` is sparse: producers emit one only where the position changes.
+
+### Variable-length integers
+
+Every integer in the container — except the one fixed field noted below — is a
+`varint`: a SQLite-style variable-length unsigned integer of 1 to 9 bytes whose
+**first byte selects the width**. Most counts and lengths are small, so they cost
+one or two bytes. Given the leading byte `A`:
+
+| leading byte `A` | total bytes | value |
+| ---------------- | ----------- | ----- |
+| `0 … 240`        | 1 | `A` |
+| `241 … 248`      | 2 | `(A − 241)·256 + b₁ + 240`  (range 241 … 2287) |
+| `249`            | 3 | `2288 + 256·b₁ + b₂`        (range 2288 … 67823) |
+| `250`            | 4 | the next 3 bytes, big-endian |
+| `251`            | 5 | the next 4 bytes, big-endian |
+| `252`            | 6 | the next 5 bytes, big-endian |
+| `253`            | 7 | the next 6 bytes, big-endian |
+| `254`            | 8 | the next 7 bytes, big-endian |
+| `255`            | 9 | the next 8 bytes, big-endian |
+
+### File layout
+
+```
+  Magic            8 bytes  -- "NIFBIN" + one endianness byte (0=little) + one version byte
+  indexOffset      8 bytes  -- FIXED little integer; BYTE offset of the index
+  tokenCount       varint
+  nTags            varint
+  nStrings         varint
+  nSyms            varint
+  nFiles           varint
+  pad              0..3 zero bytes  -- align the token block to the 4-byte token word
+  tokens           tokenCount token words   -- one contiguous block of little-endian 32-bit words
+  tags             nTags     * (varint length + that many bytes)
+  strings          nStrings  * (varint length + that many bytes)
+  syms             nSyms     * (varint length + that many bytes)
+  filenames        nFiles    * (varint length + that many bytes)
+  index (at indexOffset)
+    nIndex         varint
+    entries        nIndex    * (varint symId, varint tokenPos, varint visibility)
+```
+
+**Magic cookie.** Eight bytes: the ASCII `NIFBIN`, then a fixed endianness byte
+(`0`, meaning little-endian), then a one-byte format version. Any mismatch
+(different version or a foreign file) is a hard reject — the binary counterpart of
+the `(.nif27)` version cookie for text NIF. The endianness byte is reserved for a
+future big-endian variant; today it is always `0`.
+
+**Alignment pad.** The token block is read back *in place* (e.g. memory-mapped and
+borrowed without copying), which requires it to start at an offset that is a
+multiple of the token-word size. The varint header has a variable length, so 0–3
+zero bytes are inserted after it to realign. A writer emits the pad and every
+reader recomputes the same count from its position after the header, so they
+always agree.
+
+### The pools
+
+`tags`, `strings`, `syms` and `filenames` are the four string pools the token
+words refer to *by id*. A pool-referencing token embeds a small integer id, and
+ids are assigned `1, 2, …` in first-seen (intern) order. The pools are written in
+that id order and re-interned in the same order on load, so the ids in the raw
+token words stay valid **without any patching** — provided the load interns into
+*fresh, empty* pools (interning into a pre-populated pool would hand the same
+strings different ids while the token words still carry the old ones).
+
+### The index
+
+The trailing index is the binary analogue of a text NIF's [.index](#indexes):
+it lets a loaded module locate one symbol without scanning. Each entry records a
+global `SymbolDef`'s symbol id (into the `syms` pool), the **token position** of
+its declaration (byte offsets are meaningless in the token world, so a token
+index is used instead of the text format's byte offset), and its visibility. As
+in the text index, a symbol is *global* — and therefore indexed — iff its name has
+at least two dots (see [Module suffixes](#module-suffixes)); the visibility is
+`exported` or `hidden`, the same distinction the text index draws with its `x`
+and `h` tags. The index is always present and lives at the **end** of the file,
+exactly like the text index.
+
+**The `indexOffset` field** is the binary analogue of [.indexat](#indexes): the
+one field a reader follows to jump straight to the index. It is the sole
+**fixed-width** integer (8 bytes, not a varint) precisely so it can be *patched in
+place* — a writer reserves it, streams the token block and pools, then overwrites
+the reserved slot once the tail offset is known. A varint would change width when
+patched; the text format solves the same problem with variable-length whitespace
+inside `(.indexat      )`.
+
+### Reference implementation
+
+The reference implementation of BIF is `src/lib/bif.nim` in the Nimony toolchain,
+with the `niftools bif2nif` / `nif2bif` command-line converters. The current
+format version is `5`.
