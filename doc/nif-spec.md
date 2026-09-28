@@ -42,6 +42,11 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
   the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
   over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
+- New **line-based syntax** for top-level nodes: a top-level line that does not start
+  with `(` is read as `(tag arg1 arg2 ...)`. Within such a line, words containing a `/`
+  and ISO 8601 dates/times are read as string literals. This makes NIF usable for
+  terminal commands (`copy a/b.txt dest/b.txt`) and log files
+  (`warn 2024-08-12 "permission denied"`). See "Line-based syntax".
 
 
 Example NIF module
@@ -77,6 +82,9 @@ meaning and a NIF parser is supposed to ignore whitespace. Editors and other too
 can format and layout NIF code to be pleasing to look at.
 
 Whitespace is the set `{' ', '\t', '\n', '\r'}`.
+
+The single exception is the line-based syntax (see "Line-based syntax"), where a newline
+terminates a top-level line node.
 
 
 Control characters
@@ -464,10 +472,11 @@ Modules
 A complete NIF module consists of a list of directives followed by other CompoundNodes.
 Typically, there is a single root node of kind `stmts`.
 
-Formally a module is simply a non-empty list of `Node`:
+Formally a module is simply a non-empty list of top-level nodes, each of which is either
+an ordinary `Node` or a `LineNode` (see "Line-based syntax"):
 
 ```
-NifModule ::= Node+
+NifModule ::= (Node | LineNode)+
 ```
 
 ### Module suffixes
@@ -517,6 +526,117 @@ There must be no whitespace before the version directive so that it also functio
 "magic cookie" for tools that use these to determine file types.
 
 
+Line-based syntax
+-----------------
+
+Grammar:
+
+```
+LineNode  ::= TagHead LineArg* (Newline | <end of input>)
+LineArg   ::= AutoString | Node
+Newline   ::= '\n'
+
+WordByte  ::= any byte that is neither Whitespace nor a control character
+PathWord  ::= (WordByte | Escape) (WordByte | Escape | ':')*     -- must contain a '/'
+
+D2        ::= Digit Digit
+Date      ::= Digit Digit Digit Digit '-' D2 '-' D2
+Time      ::= D2 ':' D2 (':' D2 ('.' Digit+)?)?
+Zone      ::= 'Z' | ('+' | '-') D2 (':' D2)?
+DateTime  ::= Date ('T' Time Zone?)? | Time Zone?
+
+AutoString ::= (DateTime | PathWord) Suffix
+```
+
+NIF's parenthesized form is ideal for machines but tedious to type into a terminal
+or to emit as a log line. Therefore the **top level** of a module may alternatively be
+written line by line: a top-level line whose first non-whitespace byte is **not** `(` is a
+`LineNode`. It starts with a tag, followed by its children, and ends at the end of the line.
+
+```nif
+copy a/b.txt dest/b.txt
+warn 2024-08-12 "permission denied"
+```
+
+is the same AST as:
+
+```nif
+(copy "a/b.txt" "dest/b.txt")
+(warn "2024-08-12" "permission denied")
+```
+
+Rules:
+
+- The decision is made per top-level node: after skipping whitespace, a `(` starts an
+  ordinary `Node`, anything else starts a `LineNode`. Both forms can be mixed freely in a
+  single module, so directives keep their usual form:
+
+  ```nif
+  (.nif27)
+  info 2024-08-12T09:14:03Z "server started" (port 8080)
+  ```
+
+- Only the top level is line-based. Nesting still requires parentheses. A child in
+  parentheses may span several lines; so may a string literal. The `LineNode` ends at the
+  first newline that is not inside a string literal, char literal, comment or nested
+  compound node. Thus a parenthesized argument doubles as a line continuation.
+- The tag is an ordinary `TagHead`, so it must be an identifier and can carry line
+  information and a comment: `warn@0,1#disk#  2024-08-12 "disk full"`. The auto-string
+  rules below apply to the arguments only; `./run.sh x` is not a valid `LineNode`.
+- Leading whitespace (indentation) and `\r` are ignored. Empty lines and lines consisting
+  only of whitespace produce no node.
+- A line consisting of only a tag produces a node without children: `ls` is `(ls)`.
+- Writers should put every top-level node on its own line; `(a) b c` is valid but reads
+  as the two nodes `(a)` and `(b c)`.
+
+### Auto strings
+
+Inside a `LineNode`, including any nested compound nodes within it, two kinds of bare words
+are turned into **string literals** ("auto strings"). An auto string is indistinguishable
+from the equivalent quoted string literal in the resulting AST; `a/b.txt` and `"a/b.txt"`
+produce the very same node. Outside of a `LineNode` these rules do not apply.
+
+When the tokenizer is at the start of an atom inside a `LineNode` it tries the following,
+in order:
+
+1. **Date and time.** If the input matches `DateTime` (longest match) and the match is
+   *not* immediately followed by a `WordByte` or by `:`, the matched bytes become a string
+   literal. Supported forms are the common ISO 8601 subset:
+
+   | Written                         | Meaning                           |
+   | ------------------------------- | --------------------------------- |
+   | `2024-08-12`                    | date                              |
+   | `14:05`, `14:05:09`             | time                              |
+   | `14:05:09.250`                  | time with fractional seconds      |
+   | `2024-08-12T14:05:09Z`          | date and time, UTC                |
+   | `2024-08-12T14:05:09.25+02:00`  | date and time with UTC offset     |
+
+   The check is purely lexical: digits are counted, but ranges (month `13`, hour `25`)
+   are not validated. The date/time separator must be an upper-case `T`; a space would
+   separate two arguments.
+2. **Paths.** Otherwise, the maximal `PathWord` is scanned. If it contains at least one
+   `/`, it becomes a string literal whose content is the word with escape sequences decoded.
+   `.` inside such a word has no special meaning, so `dest/b.txt` is **not** a symbol, and
+   `../x` is not a sequence of empty nodes. A `:` may occur after the first byte, which
+   admits URLs and drive letters: `https://nim-lang.org`, `C:/tmp/x.txt`.
+3. Otherwise the input is tokenized as an ordinary atom.
+
+Since control characters still end a word, an auto string can be followed by a suffix
+(`src/main.nim@0,3`) and `(` / `)` delimit it as usual. Paths containing whitespace or
+control characters must use escapes or a quoted string literal: `my\20dir/a.txt` or
+`"my dir/a.txt"`. A path starting with `~` must be quoted since `~` introduces line
+information. Note that `..` on its own is still two empty nodes; write `../` instead.
+
+A word such as `2024-08-12/app.log` is not a date (it is followed by the `WordByte` `/`)
+but it is a path and thus also becomes a string literal.
+
+*Rationale*: `/`, ISO dates and ISO times have not been valid NIF tokens before, so the
+auto-string rules do not change the meaning of any previously valid NIF code. They are
+restricted to line-based nodes to keep the parenthesized form, which tools emit, simple
+and canonical. A writer may emit a string literal as an auto string when it is inside a
+`LineNode` and its content is re-read as the same auto string; otherwise it must quote it.
+
+
 Conformance
 -----------
 
@@ -528,6 +648,8 @@ A conformant NIF parser should:
 - Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
 - Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
+- Accept top-level `LineNode`s and turn path words and ISO dates/times within them into
+  string literals (see "Line-based syntax").
 
 
 Indexes
