@@ -42,11 +42,13 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
   the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
   over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
-- New **line-based syntax** for top-level nodes: a top-level line that does not start
+- New **optional** extension, the **line-based syntax** for top-level nodes: a top-level line that does not start
   with `(` is read as `(tag arg1 arg2 ...)`. Within such a line, words containing a `/`
   and ISO 8601 dates/times are read as string literals. This makes NIF usable for
   terminal commands (`copy a/b.txt dest/b.txt`) and log files
-  (`warn 2024-08-12 "permission denied"`). See "Line-based syntax".
+  (`warn 2024-08-12 "permission denied"`). A line-based module has no single root node;
+  it is a list of nodes that ends at the end of the input. Implementations that do not
+  support this extension remain conforming. See "Line-based syntax (optional extension)".
 
 
 Example NIF module
@@ -83,8 +85,8 @@ can format and layout NIF code to be pleasing to look at.
 
 Whitespace is the set `{' ', '\t', '\n', '\r'}`.
 
-The single exception is the line-based syntax (see "Line-based syntax"), where a newline
-terminates a top-level line node.
+The single exception is the optional line-based syntax (see "Line-based syntax (optional
+extension)"), where a newline terminates a top-level line node.
 
 
 Control characters
@@ -472,12 +474,14 @@ Modules
 A complete NIF module consists of a list of directives followed by other CompoundNodes.
 Typically, there is a single root node of kind `stmts`.
 
-Formally a module is simply a non-empty list of top-level nodes, each of which is either
-an ordinary `Node` or a `LineNode` (see "Line-based syntax"):
+Formally a module is simply a non-empty list of `Node`:
 
 ```
-NifModule ::= (Node | LineNode)+
+NifModule ::= Node+
 ```
+
+The optional line-based syntax extends this: a line-based module is a possibly empty list
+of nodes that ends at the end of the input, see "Line-based modules".
 
 ### Module suffixes
 
@@ -526,8 +530,15 @@ There must be no whitespace before the version directive so that it also functio
 "magic cookie" for tools that use these to determine file types.
 
 
-Line-based syntax
------------------
+Line-based syntax (optional extension)
+--------------------------------------
+
+The line-based syntax is an **optional extension** of NIF. A NIF processor that does not
+implement it is still a conforming implementation; for such a processor, line-based input
+is simply a syntax error. Producers must therefore only emit line-based NIF where the
+consumer is known to support it (a command shell, a log viewer, a configuration loader
+written for it). Files meant for general exchange, and in particular compiler
+intermediate files, should use the core parenthesized syntax.
 
 Grammar:
 
@@ -589,6 +600,51 @@ Rules:
 - Writers should put every top-level node on its own line; `(a) b c` is valid but reads
   as the two nodes `(a)` and `(b c)`.
 
+### Line-based modules
+
+```
+LineModule ::= (Node | LineNode)* <end of input>
+```
+
+A module that contains at least one `LineNode` is a **line-based module**. While the core
+grammar already permits several top-level nodes, a core NIF module in practice consists of
+a single root node such as `(stmts ...)`. A line-based module is instead a flat list of
+top-level nodes that is terminated only by the end of the input; there is no closing `)`
+that marks the end of the module. This is deliberate and has some consequences:
+
+- A line-based module can be appended to by writing more lines, which is exactly what a
+  log file or a shell session needs. Concatenating two line-based modules produces a
+  line-based module.
+- A consumer can process the module node by node as the lines arrive; it never has to
+  wait for a matching `)` at the end of the input.
+- Truncation cannot be detected: a line-based module cut off after any complete line is
+  still well-formed. Applications that care must add their own end marker (for example an
+  `end` line) or a checksum.
+- The empty input is a valid (empty) line-based module.
+- Directives that must precede "the module's AST" must precede the first non-directive
+  node. `.index` / `.indexat` are not meaningful for a module that keeps growing and
+  should not be used.
+
+Where a single tree is required, for example when converting to core NIF or to BIF, a
+line-based module is treated as if its non-directive top-level nodes were wrapped in one
+`(stmts ...)` root node; directives stay in front of it. Thus
+
+```nif
+(.nif27)
+mkdir out/
+copy a/b.txt out/b.txt
+```
+
+converts to the core NIF module
+
+```nif
+(.nif27)
+(stmts
+  (mkdir "out/")
+  (copy "a/b.txt" "out/b.txt")
+)
+```
+
 ### Auto strings
 
 Inside a `LineNode`, including any nested compound nodes within it, two kinds of bare words
@@ -648,8 +704,15 @@ A conformant NIF parser should:
 - Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
 - Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
-- Accept top-level `LineNode`s and turn path words and ISO dates/times within them into
-  string literals (see "Line-based syntax").
+
+### Optional extensions
+
+A conformant NIF parser *may* additionally implement the following extensions. Not
+implementing them does not affect conformance.
+
+- **Line-based syntax**: accept line-based modules, turn path words and ISO dates/times
+  inside `LineNode`s into string literals (see "Line-based syntax (optional extension)").
+  An implementation of this extension must accept every core NIF module unchanged.
 
 
 Indexes
