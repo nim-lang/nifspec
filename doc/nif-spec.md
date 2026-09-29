@@ -44,8 +44,8 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
   over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
 - New **optional** extension, the **line-based syntax** for top-level nodes: a top-level line that does not start
   with `(` is read as `(tag arg1 arg2 ...)`. A number, identifier or symbol that continues
-  with `/` or `-` extends up to the next whitespace, parenthesis or suffix and is read as a
-  string literal. This makes NIF usable for
+  with `-`, `/` or `:` extends up to the next whitespace, parenthesis or suffix and is read
+  as a string literal. This makes NIF usable for
   terminal commands (`copy a/b.txt dest/b.txt`) and log files
   (`warn 2024-08-12 "permission denied"`). A line-based module has no single root node;
   it is a list of nodes that ends at the end of the input. Implementations that do not
@@ -553,7 +553,7 @@ Within a line-based module, `Atom` has one more alternative, see "Auto strings":
 
 ```
 StrEnd     ::= Whitespace | '(' | ')' | '@' | '~' | '#'
-AutoString ::= (Number | Identifier | Symbol)? ('/' | '-') (any byte except StrEnd)* Suffix
+AutoString ::= (Number | Identifier | Symbol)? ('-' | '/' | ':') (any byte except StrEnd)* Suffix
 ```
 
 NIF's parenthesized form is ideal for machines but tedious to type into a terminal
@@ -645,26 +645,29 @@ converts to the core NIF module
 
 ### Auto strings
 
-Within a line-based module, bare words that contain a `/` or a `-` are **string
+Within a line-based module, bare words that contain a `-`, `/` or `:` are **string
 literals** ("auto strings"). This applies to every nesting level, including parenthesized
 top-level nodes. An auto string is indistinguishable from the equivalent quoted string
 literal in the resulting AST; `a/b.txt` and `"a/b.txt"` produce the very same node.
 
 The rule is: when the tokenizer has read a number, an identifier or a symbol and the
-next byte is `/` or `-`, it continues up to the next whitespace, `(`, `)`, `@`, `~` or `#`
+next byte is `-`, `/` or `:`, it continues up to the next whitespace, `(`, `)`, `@`, `~` or `#`
 (or the end of the input), and the entire byte sequence is a string literal whose content
 is the word with escape sequences decoded. `@`, `~` and `#` then start the string's
 suffix as usual, so `src/main.nim@0,3#entry#` is the string `"src/main.nim"` with line
 information and a comment. The number, identifier or symbol may also be empty, so an
-auto string can start with `/` or `-`:
+auto string can start with `/`, and with `-` when no digit follows (`-` alone is the start
+of a number):
 
 | Written                          | Read as                            |
 | -------------------------------- | ---------------------------------- |
 | `a/b.txt`, `/usr/bin`            | `"a/b.txt"`, `"/usr/bin"`          |
 | `2024-08-12`                     | `"2024-08-12"`                     |
 | `2024-08-12T14:05:09.25+02:00`   | `"2024-08-12T14:05:09.25+02:00"`   |
-| `1/2`, `x-y`                     | `"1/2"`, `"x-y"`                   |
-| `-la`, `--color`, `-`            | `"-la"`, `"--color"`, `"-"`        |
+| `14:05`, `12:00Z`                | `"14:05"`, `"12:00Z"`              |
+| `https://nim-lang.org`, `C:/tmp` | `"https://nim-lang.org"`, `"C:/tmp"` |
+| `1/2`, `x-y`, `key:`             | `"1/2"`, `"x-y"`, `"key:"`         |
+| `--color`                        | `"--color"`                        |
 | `-3`, `1.5E-3`, `x.1`            | numbers and symbols as usual       |
 
 Consequences:
@@ -673,21 +676,22 @@ Consequences:
   introducers `@`, `~`, `#` end it. The other control characters are ordinary bytes of
   it (`a/b:c` is `"a/b:c"`). `.` has no special meaning inside it, so `dest/b.txt` is
   **not** a symbol.
-- The decision is made where the number, identifier or symbol would end. A `-` that is
-  part of a number's exponent (`1.5E-3`) or its sign (`-3`) does not trigger the rule.
-  A word whose `/` or `-` comes only after a control character is not an auto string, so
-  times (`14:05`), URLs (`https://nim-lang.org`) and drive letters (`C:/tmp`) must be
-  quoted, and so must words that start with `.`, `~`, `:` or a quote (`"./run.sh"`,
+- The decision is made where the number, identifier or symbol ends. A `-` that is part of
+  a number's exponent (`1.5E-3`) or its sign (`-3`) does not trigger the rule, and neither
+  does a `-`, `/` or `:` after another control character. A `-` followed by a
+  letter is an (invalid) empty number followed by a letter, so `-la` must be quoted.
+  Words that start with `.`, `~`, `:` or a quote must be quoted as well (`"./run.sh"`,
   `"../x"`). Note that `..` on its own is still two empty nodes.
 - Words containing whitespace, parentheses, `@`, `~` or `#` use escapes (`my\20dir/a.txt`,
   `user\40host/x`) or a quoted string literal (`"my dir/a.txt"`).
 
 *Rationale*: The rule is deliberately lexical and not a grammar of dates or paths: whatever
-a command or a log line contains after a `/` or `-` is kept verbatim. `/` and `-` are not
-valid in core NIF identifiers and symbols (they have to be escaped), so the rule does not
-change the meaning of those. The only core NIF construct it affects is a number that is
-immediately followed by a `-` or `/` without whitespace, such as `1-2` for the two
-numbers `1` and `-2`; conforming writers always separate atoms by whitespace. The rule
+a command or a log line contains after a `-`, `/` or `:` is kept verbatim. `-` and `/` are
+not valid in core NIF identifiers and symbols (they have to be escaped), so the rule does
+not change the meaning of those. The only core NIF constructs it affects are atoms that are
+immediately followed by another atom starting with `-` or `:` without whitespace, such as
+`1-2` for the two numbers `1` and `-2`, or `a:b` for the identifier `a` and the symbol
+definition `:b`; conforming writers always separate atoms by whitespace. The rule
 applies to line-based modules only, to keep the parenthesized form, which tools emit,
 simple and canonical. A writer may emit a string literal as an auto string when it is in a
 line-based module and its content is re-read as the same auto string; otherwise it must
@@ -711,8 +715,8 @@ A conformant NIF parser should:
 A conformant NIF parser *may* additionally implement the following extensions. Not
 implementing them does not affect conformance.
 
-- **Line-based syntax**: accept line-based modules and read words that continue with `/`
-  or `-` as string literals (see "Line-based syntax (optional extension)"). An
+- **Line-based syntax**: accept line-based modules and read words that continue with `-`,
+  `/` or `:` as string literals (see "Line-based syntax (optional extension)"). An
   implementation of this extension must accept every core NIF module whose atoms are
   separated by whitespace unchanged.
 
