@@ -623,25 +623,6 @@ that marks the end of the module. This is deliberate and has some consequences:
   node. `.index` / `.indexat` are not meaningful for a module that keeps growing and
   should not be used.
 
-Where a single tree is required, for example when converting to core NIF or to BIF, a
-line-based module is treated as if its non-directive top-level nodes were wrapped in one
-`(stmts ...)` root node; directives stay in front of it. Thus
-
-```nif
-(.nif27)
-mkdir out/
-copy a/b.txt out/b.txt
-```
-
-converts to the core NIF module
-
-```nif
-(.nif27)
-(stmts
-  (mkdir "out/")
-  (copy "a/b.txt" "out/b.txt")
-)
-```
 
 ### Auto strings
 
