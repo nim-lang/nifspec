@@ -42,6 +42,14 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
   the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
   over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
+- New **optional** extension, the **line-based syntax** for top-level nodes: a top-level line that does not start
+  with `(` is read as `(tag arg1 arg2 ...)`. A number, identifier or symbol that continues
+  with `-`, `/` or `:` extends up to the next whitespace, parenthesis or suffix and is read
+  as a string literal. This makes NIF usable for
+  terminal commands (`copy a/b.txt dest/b.txt`) and log files
+  (`warn 2024-08-12 "permission denied"`). A line-based module has no single root node;
+  it is a list of nodes that ends at the end of the input. Implementations that do not
+  support this extension remain conforming. See "Line-based syntax (optional extension)".
 
 
 Example NIF module
@@ -77,6 +85,9 @@ meaning and a NIF parser is supposed to ignore whitespace. Editors and other too
 can format and layout NIF code to be pleasing to look at.
 
 Whitespace is the set `{' ', '\t', '\n', '\r'}`.
+
+The single exception is the optional line-based syntax (see "Line-based syntax (optional
+extension)"), where a newline terminates a top-level line node.
 
 
 Control characters
@@ -470,6 +481,9 @@ Formally a module is simply a non-empty list of `Node`:
 NifModule ::= Node+
 ```
 
+The optional line-based syntax extends this: a line-based module is a possibly empty list
+of nodes that ends at the end of the input, see "Line-based modules".
+
 ### Module suffixes
 
 A module is a file on disk. The filename typically has the structure `<suffix>.<pipeline-step>.nif`
@@ -517,6 +531,154 @@ There must be no whitespace before the version directive so that it also functio
 "magic cookie" for tools that use these to determine file types.
 
 
+Line-based syntax (optional extension)
+--------------------------------------
+
+The line-based syntax is an **optional extension** of NIF. A NIF processor that does not
+implement it is still a conforming implementation; for such a processor, line-based input
+is simply a syntax error. Producers must therefore only emit line-based NIF where the
+consumer is known to support it (a command shell, a log viewer, a configuration loader
+written for it). Files meant for general exchange, and in particular compiler
+intermediate files, should use the core parenthesized syntax.
+
+Grammar:
+
+```
+LineNode  ::= TagHead LineArg* (Newline | <end of input>)
+LineArg   ::= Node
+Newline   ::= '\n'
+```
+
+Within a line-based module, `Atom` has one more alternative, see "Auto strings":
+
+```
+StrEnd     ::= Whitespace | '(' | ')' | '@' | '~' | '#'
+AutoString ::= (Number | Identifier | Symbol)? ('-' | '/' | ':') (any byte except StrEnd)* Suffix
+```
+
+NIF's parenthesized form is ideal for machines but tedious to type into a terminal
+or to emit as a log line. Therefore the **top level** of a module may alternatively be
+written line by line: a top-level line whose first non-whitespace byte is **not** `(` is a
+`LineNode`. It starts with a tag, followed by its children, and ends at the end of the line.
+
+```nif
+copy a/b.txt dest/b.txt
+warn 2024-08-12 "permission denied"
+```
+
+is the same AST as:
+
+```nif
+(copy "a/b.txt" "dest/b.txt")
+(warn "2024-08-12" "permission denied")
+```
+
+Rules:
+
+- The decision is made per top-level node: after skipping whitespace, a `(` starts an
+  ordinary `Node`, anything else starts a `LineNode`. Both forms can be mixed freely in a
+  single module, so directives keep their usual form:
+
+  ```nif
+  (.nif27)
+  info 2024-08-12T09:14:03Z "server started" (port 8080)
+  ```
+
+- Only the top level is line-based. Nesting still requires parentheses. A child in
+  parentheses may span several lines; so may a string literal. The `LineNode` ends at the
+  first newline that is not inside a string literal, char literal, comment or nested
+  compound node. Thus a parenthesized argument doubles as a line continuation.
+- The tag is an ordinary `TagHead`, so it must be an identifier and can carry line
+  information and a comment: `warn@0,1#disk#  2024-08-12 "disk full"`. The auto-string
+  rules below apply to the arguments only; `run-all x` and `./run.sh x` are not valid
+  `LineNode`s.
+- Leading whitespace (indentation) and `\r` are ignored. Empty lines and lines consisting
+  only of whitespace produce no node.
+- A line consisting of only a tag produces a node without children: `ls` is `(ls)`.
+- Writers should put every top-level node on its own line; `(a) b c` is valid but reads
+  as the two nodes `(a)` and `(b c)`.
+
+### Line-based modules
+
+```
+LineModule ::= (Node | LineNode)* <end of input>
+```
+
+A module that contains at least one `LineNode` is a **line-based module**. While the core
+grammar already permits several top-level nodes, a core NIF module in practice consists of
+a single root node such as `(stmts ...)`. A line-based module is instead a flat list of
+top-level nodes that is terminated only by the end of the input; there is no closing `)`
+that marks the end of the module. This is deliberate and has some consequences:
+
+- A line-based module can be appended to by writing more lines, which is exactly what a
+  log file or a shell session needs. Concatenating two line-based modules produces a
+  line-based module.
+- A consumer can process the module node by node as the lines arrive; it never has to
+  wait for a matching `)` at the end of the input.
+- Truncation cannot be detected: a line-based module cut off after any complete line is
+  still well-formed. Applications that care must add their own end marker (for example an
+  `end` line) or a checksum.
+- The empty input is a valid (empty) line-based module.
+- Directives that must precede "the module's AST" must precede the first non-directive
+  node. `.index` / `.indexat` are not meaningful for a module that keeps growing and
+  should not be used.
+
+
+### Auto strings
+
+Within a line-based module, bare words that contain a `-`, `/` or `:` are **string
+literals** ("auto strings"). This applies to every nesting level, including parenthesized
+top-level nodes. An auto string is indistinguishable from the equivalent quoted string
+literal in the resulting AST; `a/b.txt` and `"a/b.txt"` produce the very same node.
+
+The rule is: when the tokenizer has read a number, an identifier or a symbol and the
+next byte is `-`, `/` or `:`, it continues up to the next whitespace, `(`, `)`, `@`, `~` or `#`
+(or the end of the input), and the entire byte sequence is a string literal whose content
+is the word with escape sequences decoded. `@`, `~` and `#` then start the string's
+suffix as usual, so `src/main.nim@0,3#entry#` is the string `"src/main.nim"` with line
+information and a comment. The number, identifier or symbol may also be empty, so an
+auto string can start with `/`, and with `-` when no digit follows (`-` alone is the start
+of a number):
+
+| Written                          | Read as                            |
+| -------------------------------- | ---------------------------------- |
+| `a/b.txt`, `/usr/bin`            | `"a/b.txt"`, `"/usr/bin"`          |
+| `2024-08-12`                     | `"2024-08-12"`                     |
+| `2024-08-12T14:05:09.25+02:00`   | `"2024-08-12T14:05:09.25+02:00"`   |
+| `14:05`, `12:00Z`                | `"14:05"`, `"12:00Z"`              |
+| `https://nim-lang.org`, `C:/tmp` | `"https://nim-lang.org"`, `"C:/tmp"` |
+| `1/2`, `x-y`, `key:`             | `"1/2"`, `"x-y"`, `"key:"`         |
+| `--color`                        | `"--color"`                        |
+| `-3`, `1.5E-3`, `x.1`            | numbers and symbols as usual       |
+
+Consequences:
+
+- Once a word has become an auto string, only whitespace, parentheses and the suffix
+  introducers `@`, `~`, `#` end it. The other control characters are ordinary bytes of
+  it (`a/b:c` is `"a/b:c"`). `.` has no special meaning inside it, so `dest/b.txt` is
+  **not** a symbol.
+- The decision is made where the number, identifier or symbol ends. A `-` that is part of
+  a number's exponent (`1.5E-3`) or its sign (`-3`) does not trigger the rule, and neither
+  does a `-`, `/` or `:` after another control character. A `-` followed by a
+  letter is an (invalid) empty number followed by a letter, so `-la` must be quoted.
+  Words that start with `.`, `~`, `:` or a quote must be quoted as well (`"./run.sh"`,
+  `"../x"`). Note that `..` on its own is still two empty nodes.
+- Words containing whitespace, parentheses, `@`, `~` or `#` use escapes (`my\20dir/a.txt`,
+  `user\40host/x`) or a quoted string literal (`"my dir/a.txt"`).
+
+*Rationale*: The rule is deliberately lexical and not a grammar of dates or paths: whatever
+a command or a log line contains after a `-`, `/` or `:` is kept verbatim. `-` and `/` are
+not valid in core NIF identifiers and symbols (they have to be escaped), so the rule does
+not change the meaning of those. The only core NIF constructs it affects are atoms that are
+immediately followed by another atom starting with `-` or `:` without whitespace, such as
+`1-2` for the two numbers `1` and `-2`, or `a:b` for the identifier `a` and the symbol
+definition `:b`; conforming writers always separate atoms by whitespace. The rule
+applies to line-based modules only, to keep the parenthesized form, which tools emit,
+simple and canonical. A writer may emit a string literal as an auto string when it is in a
+line-based module and its content is re-read as the same auto string; otherwise it must
+quote it.
+
+
 Conformance
 -----------
 
@@ -528,6 +690,16 @@ A conformant NIF parser should:
 - Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
 - Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
+
+### Optional extensions
+
+A conformant NIF parser *may* additionally implement the following extensions. Not
+implementing them does not affect conformance.
+
+- **Line-based syntax**: accept line-based modules and read words that continue with `-`,
+  `/` or `:` as string literals (see "Line-based syntax (optional extension)"). An
+  implementation of this extension must accept every core NIF module whose atoms are
+  separated by whitespace unchanged.
 
 
 Indexes
