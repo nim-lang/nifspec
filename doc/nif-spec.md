@@ -39,6 +39,7 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
   numbers still require a leading `-` (`-12`). The `~` sign is reserved for line-info
   diffs.
 - `@` was added to the set of control characters.
+- `#` and `:` may appear directly inside double-quoted string literals, without escaping.
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
   the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
   over `\5C`; importantly, `\\` is **not** an escape sequence in NIF.
@@ -94,10 +95,12 @@ Control characters
 ------------------
 
 NIF uses a small set of ASCII control characters (for example `(`, `)` and `~`) to describe
-AST structure. These characters **must not** occur literally in string literals, char
-literals, identifiers or symbols because a parser relies on them to find matching delimiters
-and suffix introducers. They may, however, be represented inside literals or comments or
-identifiers or symbols when escaped using the hex escape `\xx` (see "Escape sequences").
+AST structure. These characters **must not** occur literally in char literals, identifiers
+or symbols. The same restriction applies to string literals, except that `#` and `:` may
+appear directly inside the surrounding double quotes (see "String literals"). A parser
+relies on the remaining restrictions to find matching delimiters and suffix introducers.
+Control characters may be represented inside literals or comments or identifiers or
+symbols when escaped using the hex escape `\xx` (see "Escape sequences").
 
 The control characters are the following ASCII bytes:
 
@@ -130,8 +133,8 @@ In addition, the following two-byte shortcuts are accepted:
 | `\|`     | `\x5C`       | a literal backslash |
 | `\^`     | `\x22`       | a literal `"`       |
 
-*Caution*: The commonly used `"\\"` in other languages that escapes the backslash itself
-is **not** supported. Use `\|` or `\5C`.
+*Caution*: The commonly used escapes `\\` and `\"` are **not** supported. Use `\|` or `\5C`
+for a literal backslash, and `\^` or `\22` for a literal double quote.
 
 *Rationale*: Each shortcut body byte (`n`, `t`, `r`, `|`, `^`) is neither a hexadecimal
 digit nor a NIF control character, so a single byte of look-ahead after `\` unambiguously
@@ -255,13 +258,26 @@ Grammar:
 
 ```
 EscapedData   ::= (VisibleChar | Escape | Whitespace)*
-StringLiteral ::= '"' EscapedData '"'
+StringData    ::= (VisibleChar | '#' | ':' | Escape | Whitespace)*
+StringLiteral ::= '"' StringData '"'
 ```
 
 String literals are enclosed in double quotes. Escapes are as defined under **Escape sequences**
-(`\xx` plus the `\n`, `\t`, `\r`, `\|`, `\^` shortcuts). Note again that `\\` is **not** an escape.
+(`\xx` plus the `\n`, `\t`, `\r`, `\|`, `\^` shortcuts). Neither `\\` nor `\"` is an escape.
 Whitespace, even including newlines, can be part of the string literal without having to
 escape it.
+
+The control characters `#` and `:` can appear directly inside the surrounding double quotes,
+as can the ordinary character `;`. A `#` inside a string belongs to its content; a comment
+suffix starts after the closing quote. For example:
+
+```nif
+(tag 0 "2026-10-11T12:00:00Z")
+"key: value; # text"#comment#
+```
+
+The second example is a string with content `key: value; # text` and a comment with content
+`comment`. Hex escapes such as `\23`, `\3A` and `\3B` remain valid alternatives for these bytes.
 
 For example, the following single string literal contains an escaped byte plus an actual newline:
 
@@ -686,6 +702,7 @@ A conformant NIF parser should:
 
 - Accept the module as a sequence of bytes and tolerate non-UTF-8 content.
 - Allow bytes with value >= 128 in identifiers and string/char literals without requiring escapes.
+- Allow literal `#`, `:` and `;` inside double-quoted string literals.
 - Support the `\xx` escape form for representing arbitrary byte values (including escaping control characters and `\` as `\5C`).
 - Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
