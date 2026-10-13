@@ -38,8 +38,8 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
 - Numbers no longer require a leading `+`. Bare `12` is the integer twelve. Negative
   numbers still require a leading `-` (`-12`). The `~` sign is reserved for line-info
   diffs.
-- Integers may also use hexadecimal (`0x` / `0X`), octal (`0o` / `0O`) or binary
-  (`0b` / `0B`) notation. Numbers may contain `_` separators between digits.
+- Integers may also use hexadecimal (`0x`), octal (`0o`) or binary
+  (`0b`) notation. Numbers may contain `_` separators between digits.
 - `@` was added to the set of control characters.
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
   the canonical `\xx` form. The `\|` shortcut for a literal backslash is preferred
@@ -229,16 +229,16 @@ HexDigits         ::= HexDigit ('_'? HexDigit)*
 OctalDigits       ::= OctalDigit ('_'? OctalDigit)*
 BinaryDigits      ::= BinaryDigit ('_'? BinaryDigit)*
 IntegerPart       ::= DecimalDigits
-                    | '0' ('x' | 'X') HexDigits
-                    | '0' ('o' | 'O') OctalDigits
-                    | '0' ('b' | 'B') BinaryDigits
+                    | '0' 'x'HexDigits
+                    | '0' 'o' OctalDigits
+                    | '0' 'b' BinaryDigits
 Exponent          ::= 'E' ('+' | '-')? DecimalDigits
 FloatingPointPart ::= '.' DecimalDigits Exponent? | Exponent
 Number            ::= '-'? (IntegerPart 'u'? | DecimalDigits FloatingPointPart)
 ```
 
-Integers use decimal notation by default. The prefixes `0x` / `0X`, `0o` / `0O`
-and `0b` / `0B` select hexadecimal, octal and binary notation, respectively. A prefix
+Integers use decimal notation by default. The prefixes `0x`, `0o`
+and `0b` select hexadecimal, octal and binary notation, respectively. A prefix
 must be followed by at least one digit of that base. Hexadecimal digits accept ASCII
 letters in either case. A leading zero alone does not select octal: `012` is decimal twelve.
 
@@ -261,13 +261,13 @@ Examples of equivalent numeric spellings:
 
 | Written                         | Equivalent decimal spelling |
 | ------------------------------- | --------------------------- |
-| `0xFF`, `0Xff`, `0xff`            | `255`                       |
-| `0o377`, `0O377`                 | `255`                       |
-| `0b1111_1111`, `0B11111111`       | `255`                       |
+| `0xFF`, `0xff`                  | `255`                       |
+| `0o377`                         | `255`                       |
+| `0b1111_1111`                   | `255`                       |
 | `-0xFF`                         | `-255`                      |
-| `0xDEAD_BEEFu`                   | `3735928559u`                |
+| `0xDEAD_BEEFu`                  | `3735928559u`               |
 | `1_000_000`                     | `1000000`                   |
-| `1_234.5_6E+0_2`                | `1234.56E+02`                |
+| `1_234.5_6E+0_2`                | `1234.56E+02`               |
 
 Malformed numeric spellings include `0x`, `0o8`, `0b102`, `0x_FF`, `1_`, `1__2`,
 `1_.0`, `1._0`, `1E_2`, `1E+_2` and `1_u`.
