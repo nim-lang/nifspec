@@ -38,6 +38,8 @@ This document describes the **2027** version of NIF. Differences to the 2026 ver
 - Numbers no longer require a leading `+`. Bare `12` is the integer twelve. Negative
   numbers still require a leading `-` (`-12`). The `~` sign is reserved for line-info
   diffs.
+- Integers may also use hexadecimal (`0x`), octal (`0o`) or binary
+  (`0b`) notation. Numbers may contain `_` separators between digits.
 - `@` was added to the set of control characters.
 - `#` and `:` may appear directly inside double-quoted string literals, without escaping.
 - New escape shortcuts `\n`, `\t`, `\r`, `\|`, `\^` are recognized in addition to
@@ -222,17 +224,59 @@ Grammar:
 
 ```
 Digit             ::= [0-9]
-FloatingPointPart ::= ('.' Digit+ ('E' ('+' | '-')? Digit+)? ) | 'E' ('+' | '-')? Digit+
-Number            ::= '-'? Digit+ (FloatingPointPart | 'u')?
+HexDigit          ::= [0-9A-Fa-f]
+OctalDigit        ::= [0-7]
+BinaryDigit       ::= [0-1]
+DecimalDigits     ::= Digit ('_'? Digit)*
+HexDigits         ::= HexDigit ('_'? HexDigit)*
+OctalDigits       ::= OctalDigit ('_'? OctalDigit)*
+BinaryDigits      ::= BinaryDigit ('_'? BinaryDigit)*
+IntegerPart       ::= DecimalDigits
+                    | '0' 'x'HexDigits
+                    | '0' 'o' OctalDigits
+                    | '0' 'b' BinaryDigits
+Exponent          ::= 'E' ('+' | '-')? DecimalDigits
+FloatingPointPart ::= '.' DecimalDigits Exponent? | Exponent
+Number            ::= '-'? (IntegerPart 'u'? | DecimalDigits FloatingPointPart)
 ```
 
-Numbers use decimal notation only; for example, Nim's `0xff` becomes `255`.
+Integers use decimal notation by default. The prefixes `0x`, `0o`
+and `0b` select hexadecimal, octal and binary notation, respectively. A prefix
+must be followed by at least one digit of that base. Hexadecimal digits accept ASCII
+letters in either case. A leading zero alone does not select octal: `012` is decimal twelve.
 
 Positive numbers do **not** require a leading `+`; bare `12` is the integer twelve.
-Negative numbers carry a leading `-` (e.g. `-12`).
+Negative numbers carry a leading `-` before any base prefix (e.g. `-12`, `-0xC`).
+The sign applies to the numeric value; a base prefix does not imply a bit width or a
+two's-complement interpretation.
 
-Unsigned numbers always have a `u` suffix. Floating point numbers must contain a dot or `E`.
-Every other number is interpreted as a signed integer.
+Unsigned integers always have a `u` suffix, after the digits in any base. Every other
+integer is interpreted as signed. Floating point numbers use decimal notation and
+must contain a dot or an upper-case `E`. In hexadecimal integers, `E` and `e` are
+digits, so `0x1E3` is the integer `483`, not a floating point number. Hexadecimal,
+octal and binary floating point literals are not supported.
+
+An underscore `_` may separate two digits within any integer, fractional or exponent
+digit sequence; it does not affect the value. Separators cannot be repeated or placed
+next to a base prefix, dot, exponent marker, sign or `u` suffix, or at the end of a number.
+
+Examples of equivalent numeric spellings:
+
+| Written                         | Equivalent decimal spelling |
+| ------------------------------- | --------------------------- |
+| `0xFF`, `0xff`                  | `255`                       |
+| `0o377`                         | `255`                       |
+| `0b1111_1111`                   | `255`                       |
+| `-0xFF`                         | `-255`                      |
+| `0xDEAD_BEEFu`                  | `3735928559u`               |
+| `1_000_000`                     | `1000000`                   |
+| `1_234.5_6E+0_2`                | `1234.56E+02`               |
+
+Malformed numeric spellings include `0x`, `0o8`, `0b102`, `0x_FF`, `1_`, `1__2`,
+`1_.0`, `1._0`, `1E_2`, `1E+_2` and `1_u`.
+
+These rules apply to number atoms only. Hex escapes, base62 line information and
+symbol disambiguation numbers retain their own syntax.
 
 Because identifiers cannot start with a digit and line information is now introduced by
 `@` or a leading `~` (see "Line information"), a leading digit unambiguously starts a number.
@@ -704,6 +748,8 @@ A conformant NIF parser should:
 - Allow bytes with value >= 128 in identifiers and string/char literals without requiring escapes.
 - Allow literal `#`, `:` and `;` inside double-quoted string literals.
 - Support the `\xx` escape form for representing arbitrary byte values (including escaping control characters and `\` as `\5C`).
+- Parse decimal, hexadecimal, octal and binary integers and decimal floating point
+  numbers, including `_` separators between digits as specified under "Numbers".
 - Parse base62 line-information diffs and the leading-`~` shortcut form.
 - Parse and ignore unknown directives and tolerate optional indexes.
 - Expand trailing-dot global symbols (e.g., `foo.0.`) to include the module suffix when required.
